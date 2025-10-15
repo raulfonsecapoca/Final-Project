@@ -1,1 +1,1 @@
-print("Hello, Pokemon World!")
+print("Hi, Pokemon World!")
