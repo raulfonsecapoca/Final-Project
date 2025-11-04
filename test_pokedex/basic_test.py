@@ -1,6 +1,6 @@
 import numpy as np
 
-from numpy.my_module import typed_function
+from pokedex.my_module import typed_function
 
 
 def test_typed_function():

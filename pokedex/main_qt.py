@@ -17,7 +17,7 @@ import requests
 
 import numpy as np  # kept because you used it earlier; remove if unused
 from PySide6.QtCore import Qt, QSize, QUrl
-from PySide6.QtGui import QPixmap, QAction
+from PySide6.QtGui import QPixmap, QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -67,6 +67,9 @@ class PokedexWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Pokédex")
         self.setMinimumSize(900, 650)
+        # --- Window icon ---
+        self.setWindowIcon(QIcon("data/sprites/sprites/items/poke-ball.png"))
+
 
         # Media player (for cries)
         self.player = QMediaPlayer(self)
@@ -82,8 +85,19 @@ class PokedexWindow(QWidget):
 
         self.form_combo = QComboBox()
         self.form_combo.setEnabled(False)
-        self.btn_apply_form = QPushButton("Apply Form")
-        self.btn_apply_form.setEnabled(False)
+        # Make the combo box wide enough to display full text
+        self.form_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.form_combo.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
+        self.form_combo.setMinimumContentsLength(12)  # optional: tweak to your dataset
+
+
+
+        # Cache to avoid unnecessary rebuilds + track base form name (the Pokémon name)
+        self._forms_cache_identifier = None
+        self._forms_cache_list = None  # list[str] excluding the base name
+        self._base_form_name = ""      # equals to current Pokémon 'name'
+
+
 
         top_row = QHBoxLayout()
         top_row.addWidget(self.input_name, 3)
@@ -91,7 +105,6 @@ class PokedexWindow(QWidget):
         top_row.addSpacing(12)
         top_row.addWidget(QLabel("Form:"), 0)
         top_row.addWidget(self.form_combo, 0)
-        top_row.addWidget(self.btn_apply_form, 0)
         top_row.addSpacing(12)
         top_row.addWidget(self.btn_play_cry, 0)
 
@@ -166,7 +179,8 @@ class PokedexWindow(QWidget):
         # --- Signals
         self.btn_load.clicked.connect(self._on_load_clicked)
         self.btn_play_cry.clicked.connect(self._on_play_cry_clicked)
-        self.btn_apply_form.clicked.connect(self._on_apply_form_clicked)
+        # Change form automatically when the combo changes
+        self.form_combo.currentTextChanged.connect(self._on_form_changed)
 
         # State
         self.current_identifier = None
@@ -176,6 +190,7 @@ class PokedexWindow(QWidget):
     # -------------------- Data loading and UI binding --------------------
 
     def _on_load_clicked(self):
+        """Handle the Load button click; fetch by name/number."""
         ident = self.input_name.text().strip()
         if not ident:
             QMessageBox.warning(self, "Pokédex", "Please type a Pokémon name or number.")
@@ -183,11 +198,17 @@ class PokedexWindow(QWidget):
         self.current_identifier = ident
         self._load_pokemon_data(identifier=ident, form=None)
 
-    def _on_apply_form_clicked(self):
+    def _on_form_changed(self, form_text: str):
+        """Auto-apply selected form; base form is the Pokémon name."""
         if not self.current_identifier:
             return
-        form = self.form_combo.currentText() or None
-        self._load_pokemon_data(identifier=self.current_identifier, form=form)
+
+        # If the selected text equals the base form (Pokémon name), treat as default
+        if form_text == self._base_form_name:
+            self._load_pokemon_data(identifier=self.current_identifier, form=None)
+        else:
+            self._load_pokemon_data(identifier=self.current_identifier, form=form_text)
+
 
     def _load_pokemon_data(self, identifier: str, form: str | None):
         """Calls your API (typed_function) and binds the result to the UI."""
@@ -210,7 +231,7 @@ class PokedexWindow(QWidget):
             self._bind_evolution_line(data.get("evolution_line", []))
             self._bind_forms(identifier, data)
 
-            # cries
+            # Cries
             cries = data.get("cries") or []
             self.btn_play_cry.setEnabled(bool(cries))
             self.current_cry_index = 0
@@ -221,6 +242,7 @@ class PokedexWindow(QWidget):
     # ---- Binders
 
     def _bind_header(self, data: dict):
+        """Bind name, dex number and main sprite."""
         name = data.get("name", "Unknown")
         dex = data.get("dex_number", "—")
         self.lbl_name.setText(f"<b>{name}</b>")
@@ -235,13 +257,14 @@ class PokedexWindow(QWidget):
             self.lbl_sprite.setText("")
 
     def _bind_types(self, types: list[str]):
-        # clear previous
+        """Render type chips; clear and rebuild row."""
+        # Clear previous
         while self.types_row.count() > 0:
             item = self.types_row.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        # add new
+        # Add new
         self.types_row.addStretch()
         for t in types:
             chip = QLabel(t)
@@ -252,24 +275,27 @@ class PokedexWindow(QWidget):
         self.types_row.addStretch()
 
     def _bind_stats(self, stats: dict):
+        """Bind base stats; accepts uppercase or lowercase keys."""
         for key, lbl in self.stats_labels.items():
             val = stats.get(key) or stats.get(key.lower()) or "—"
             lbl.setText(str(val))
 
     def _bind_evolution_line(self, evo_list: list[dict]):
-        # clear row
+        """Render evolution cards horizontally inside a scroll area."""
+        # Clear row
         while self.evo_row.count() > 0:
             item = self.evo_row.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        # rebuild
+        # Rebuild
         for node in evo_list:
             w = self._make_evo_card(node.get("name", "?"), node.get("image"))
             self.evo_row.addWidget(w)
         self.evo_row.addStretch()
 
     def _make_evo_card(self, name: str, image: str | None) -> QWidget:
+        """Create a small card with sprite, name and a button to open that Pokémon."""
         box = QVBoxLayout()
         img = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         pm = _load_pixmap(image, QSize(96, 96)) if image else QPixmap()
@@ -280,7 +306,7 @@ class PokedexWindow(QWidget):
         nm = QLabel(name, alignment=Qt.AlignmentFlag.AlignCenter)
         nm.setWordWrap(True)
 
-        # clickable to load that Pokémon
+        # Clickable to load that Pokémon by name (adjust if you need to use IDs)
         btn = QPushButton("View")
         btn.clicked.connect(lambda: self._load_pokemon_data(identifier=name, form=None))
 
@@ -293,6 +319,12 @@ class PokedexWindow(QWidget):
         return cont
 
     def _bind_forms(self, identifier: str, data: dict):
+        """Populate combo with [base name] + other forms; keep selection stable."""
+        # Base form is the Pokémon's own name
+        base_name = data.get("name") or ""
+        self._base_form_name = base_name
+
+        # Fetch forms list (other/alternate forms)
         forms = data.get("forms")
         if forms is None and hasattr(api, "get_available_forms"):
             try:
@@ -300,19 +332,50 @@ class PokedexWindow(QWidget):
             except Exception:
                 forms = None
 
-        self.form_combo.clear()
-        if forms:
-            for f in forms:
-                self.form_combo.addItem(str(f))
+        # Normalize and ensure we don't duplicate the base name in 'forms'
+        forms = [str(f) for f in (forms or []) if str(f).strip() and str(f) != base_name]
+
+        # If nothing changed (same identifier and same forms), don't rebuild
+        if (
+            self._forms_cache_identifier == identifier
+            and self._forms_cache_list == forms
+            and self.form_combo.count() > 0
+        ):
+            # Ensure it's enabled if there is at least the base item
             self.form_combo.setEnabled(True)
-            self.btn_apply_form.setEnabled(True)
-        else:
-            self.form_combo.setEnabled(False)
-            self.btn_apply_form.setEnabled(False)
+            # Also ensure the current selection reflects API's current form
+            current_form = data.get("form")
+            desired_text = base_name if not current_form else str(current_form)
+            if self.form_combo.currentText() != desired_text:
+                self.form_combo.blockSignals(True)
+                self.form_combo.setCurrentText(desired_text)
+                self.form_combo.blockSignals(False)
+            return
+
+        # Update cache
+        self._forms_cache_identifier = identifier
+        self._forms_cache_list = forms
+
+        # Rebuild combo: first item is ALWAYS the base form (Pokémon name)
+        self.form_combo.blockSignals(True)
+        self.form_combo.clear()
+        self.form_combo.addItem(base_name)
+        for f in forms:
+            self.form_combo.addItem(f)
+        self.form_combo.setEnabled(True)
+
+        # Select current form reported by API (None/default -> base_name)
+        current_form = data.get("form")
+        desired_text = base_name if not current_form else str(current_form)
+        self.form_combo.setCurrentText(desired_text)
+
+        self.form_combo.blockSignals(False)
+
 
     # -------------------- Media --------------------
 
     def _on_play_cry_clicked(self):
+        """Play next cry in sequence."""
         cries = self.current_data.get("cries") or []
         if not cries:
             return
@@ -321,6 +384,7 @@ class PokedexWindow(QWidget):
         self._play_audio(url)
 
     def _play_audio(self, url_or_path: str):
+        """Play audio from URL or local path."""
         try:
             if url_or_path.startswith(("http://", "https://")):
                 self.player.setSource(QUrl(url_or_path))
