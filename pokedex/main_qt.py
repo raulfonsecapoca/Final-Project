@@ -2,22 +2,22 @@
 Pokedex page using PySide6.
 
 This file expects pokedex.my_module.typed_function to expose:
-- get_pokemon(identifier: str, form: str | None = None) -> dict
+- get_pokemon(identifier: str, form: str | None = None, language_id: int = 9) -> dict
   returning keys: name, dex_number, image, cries (list[str]), types (list[str]),
   base_stats (dict[str,int]), evolution_line (list[dict{name,image}]), forms (list[str]|optional)
 - (optional) get_available_forms(identifier) -> list[str]
-
-If your API differs, just adapt the calls in _load_pokemon_data().
+- (optional) get_pokedex_flavor(identifier: str, language_id: int = 9)
+  returning {"versions": list, "flavor_texts": list}
 """
 
 import sys
-import io
 import os
-import requests
+from typing import List, Tuple
 
-import numpy as np  # kept because you used it earlier; remove if unused
+import requests
+import pandas as pd
 from PySide6.QtCore import Qt, QSize, QUrl
-from PySide6.QtGui import QPixmap, QAction, QIcon
+from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -32,13 +32,19 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QComboBox,
     QSizePolicy,
-    QSpacerItem,
     QGroupBox,
+    QToolButton,
 )
+
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from pokedex.my_module import typed_function as api  # your data provider
 
-from pokedex.my_module import typed_function as api  # <— your data provider
+# ---- CSVs for language metadata (used only for the language buttons) ---------
+language_names_df = pd.read_csv("data/csv/language_names.csv")
+languages_df = pd.read_csv("data/csv/languages.csv")
 
+
+# ---- Helpers -----------------------------------------------------------------
 
 def _load_pixmap(path_or_url: str, max_size: QSize | None = QSize(256, 256)) -> QPixmap:
     """Load image from local path or URL into QPixmap; optionally scale preserving aspect ratio."""
@@ -46,9 +52,8 @@ def _load_pixmap(path_or_url: str, max_size: QSize | None = QSize(256, 256)) -> 
         if path_or_url.startswith(("http://", "https://")):
             resp = requests.get(path_or_url, timeout=10)
             resp.raise_for_status()
-            data = resp.content
             pm = QPixmap()
-            pm.loadFromData(data)
+            pm.loadFromData(resp.content)
         else:
             pm = QPixmap(path_or_url)
 
@@ -56,27 +61,46 @@ def _load_pixmap(path_or_url: str, max_size: QSize | None = QSize(256, 256)) -> 
             return QPixmap()
 
         if max_size is not None:
-            pm = pm.scaled(max_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            pm = pm.scaled(
+                max_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         return pm
     except Exception:
         return QPixmap()
 
+
+def _lang_autonym(lang_id: int) -> str:
+    """
+    Prefer the autonym (language name in its own language): local_language_id == language_id.
+    Fallback to English exonym (local_language_id == 9). Final fallback: the numeric id.
+    """
+    df = language_names_df
+    row = df[(df["language_id"] == lang_id) & (df["local_language_id"] == lang_id)]
+    if not row.empty:
+        return str(row["name"].iloc[0])
+    row = df[(df["language_id"] == lang_id) & (df["local_language_id"] == 9)]
+    if not row.empty:
+        return str(row["name"].iloc[0])
+    return str(lang_id)
+
+
+# ---- Main Window --------------------------------------------------------------
 
 class PokedexWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Pokédex")
         self.setMinimumSize(900, 650)
-        # --- Window icon ---
         self.setWindowIcon(QIcon("data/sprites/sprites/items/poke-ball.png"))
 
-
-        # Media player (for cries)
+        # Playback
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
         self.player.setAudioOutput(self.audio)
 
-        # --- Top: search bar + form selector + buttons
+        # ---------- Top bar: search + form combo + cry ----------
         self.input_name = QLineEdit()
         self.input_name.setPlaceholderText("Enter Pokémon name or number (e.g., pikachu or 25)")
         self.btn_load = QPushButton("Load")
@@ -85,31 +109,32 @@ class PokedexWindow(QWidget):
 
         self.form_combo = QComboBox()
         self.form_combo.setEnabled(False)
-        # Make the combo box wide enough to display full text
         self.form_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.form_combo.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
-        self.form_combo.setMinimumContentsLength(12)  # optional: tweak to your dataset
+        self.form_combo.setMinimumContentsLength(12)
 
-
-
-        # Cache to avoid unnecessary rebuilds + track base form name (the Pokémon name)
+        # Forms combo state (frozen order)
         self._forms_cache_identifier = None
-        self._forms_cache_list = None  # list[str] excluding the base name
-        self._base_form_name = ""      # equals to current Pokémon 'name'
+        self._forms_cache_list: List[str] = None  # type: ignore
+        self._forms_order: List[str] = []
 
+        # ---------- Language bar (11 official languages) ----------
+        # Default language is English (id=9)
+        self.current_language_id = 9
 
+        # Build official languages dynamically from languages.csv (official==1), ordered.
+        official_ids: List[int] = (
+            languages_df[languages_df["official"] == 1]
+            .sort_values("order")["id"]
+            .astype(int)
+            .tolist()
+        )
+        # Create (id, display_name) pairs using autonyms
+        self._official_langs: List[Tuple[int, str]] = [(lid, _lang_autonym(lid)) for lid in official_ids]
 
-        top_row = QHBoxLayout()
-        top_row.addWidget(self.input_name, 3)
-        top_row.addWidget(self.btn_load, 0)
-        top_row.addSpacing(12)
-        top_row.addWidget(QLabel("Form:"), 0)
-        top_row.addWidget(self.form_combo, 0)
-        top_row.addSpacing(12)
-        top_row.addWidget(self.btn_play_cry, 0)
-
-        # --- Left: main sprite + name + types + dex
-        self.lbl_sprite = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        # ---------- Left column ----------
+        self.lbl_sprite = QLabel()
+        self.lbl_sprite.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_sprite.setFrameShape(QFrame.Shape.Panel)
         self.lbl_sprite.setFrameShadow(QFrame.Shadow.Sunken)
         self.lbl_sprite.setMinimumSize(256, 256)
@@ -122,19 +147,34 @@ class PokedexWindow(QWidget):
         self.types_row = QHBoxLayout()
         self.types_row.addStretch()
 
-        left_col = QVBoxLayout()
-        left_col.addWidget(self.lbl_sprite)
-        left_col.addSpacing(8)
-        left_col.addWidget(self.lbl_name)
-        left_col.addWidget(self.lbl_dex)
-        left_col.addLayout(self.types_row)
-        left_col.addStretch()
+        # Pokédex flavor (versions + text)
+        self.dex_group = QGroupBox("Pokédex Entry")
+        self.dex_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
-        # --- Right top: base stats grid
+        self.dex_combo = QComboBox()
+        self.dex_combo.setEnabled(False)
+        self.dex_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.dex_combo.currentIndexChanged.connect(self._on_pokedex_version_changed)
+
+        self.lbl_flavor = QLabel("—")
+        self.lbl_flavor.setWordWrap(True)
+        self.lbl_flavor.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.lbl_flavor.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        self.lbl_flavor.setMinimumHeight(140)
+
+        dex_layout = QVBoxLayout()
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Version:"))
+        row.addWidget(self.dex_combo, 1)
+        dex_layout.addLayout(row)
+        dex_layout.addWidget(self.lbl_flavor)
+        self.dex_group.setLayout(dex_layout)
+        self.dex_group.setEnabled(False)
+
+        # ---------- Right column ----------
         self.stats_grid = QGridLayout()
         self.stats_labels = {}
-        stat_names = ["HP", "Atk", "Def", "SpA", "SpD", "Spe"]
-        for r, s in enumerate(stat_names):
+        for r, s in enumerate(["HP", "Atk", "Def", "SpA", "SpD", "Spe"]):
             k = QLabel(f"{s}:")
             v = QLabel("—")
             self.stats_labels[s] = v
@@ -146,7 +186,6 @@ class PokedexWindow(QWidget):
         sg_layout.addLayout(self.stats_grid)
         stats_group.setLayout(sg_layout)
 
-        # --- Right bottom: evolution line (scrollable row of image+name)
         self.evo_container = QWidget()
         self.evo_row = QHBoxLayout(self.evo_container)
         self.evo_row.setContentsMargins(0, 0, 0, 0)
@@ -156,30 +195,53 @@ class PokedexWindow(QWidget):
         evo_scroll = QScrollArea()
         evo_scroll.setWidgetResizable(True)
         evo_scroll.setWidget(self.evo_container)
+
         evo_group = QGroupBox("Evolution Line")
         el = QVBoxLayout()
         el.addWidget(evo_scroll)
         evo_group.setLayout(el)
 
+        # ---------- Layout assembly ----------
+        top_row = QHBoxLayout()
+        top_row.addWidget(self.input_name, 3)
+        top_row.addWidget(self.btn_load, 0)
+        top_row.addSpacing(12)
+        top_row.addWidget(QLabel("Form:"), 0)
+        top_row.addWidget(self.form_combo, 0)
+        top_row.addSpacing(12)
+        top_row.addWidget(self.btn_play_cry, 0)
+
+        # Language bar
+        self.lang_row = QHBoxLayout()
+        self._build_language_bar(self.lang_row)
+
+        left_col = QVBoxLayout()
+        left_col.addWidget(self.lbl_sprite)
+        left_col.addSpacing(8)
+        left_col.addWidget(self.lbl_name)
+        left_col.addWidget(self.lbl_dex)
+        left_col.addLayout(self.types_row)
+        left_col.addSpacing(8)
+        left_col.addWidget(self.dex_group)
+        left_col.addStretch()
+
         right_col = QVBoxLayout()
         right_col.addWidget(stats_group)
         right_col.addWidget(evo_group, 1)
 
-        # --- Main 2-column area
         main_row = QHBoxLayout()
         main_row.addLayout(left_col, 1)
         main_row.addLayout(right_col, 2)
 
-        # --- Root layout
         root = QVBoxLayout(self)
         root.addLayout(top_row)
+        root.addLayout(self.lang_row)  # language buttons under the top bar
         root.addSpacing(6)
         root.addLayout(main_row, 1)
 
-        # --- Signals
+        # ---------- Signals ----------
         self.btn_load.clicked.connect(self._on_load_clicked)
         self.btn_play_cry.clicked.connect(self._on_play_cry_clicked)
-        # Change form automatically when the combo changes
         self.form_combo.currentTextChanged.connect(self._on_form_changed)
 
         # State
@@ -187,10 +249,43 @@ class PokedexWindow(QWidget):
         self.current_data = {}
         self.current_cry_index = 0
 
-    # -------------------- Data loading and UI binding --------------------
+        # Pokédex flavor state
+        self._flavor_versions: List[str] = []
+        self._flavor_texts: List[str] = []
+
+    # ---- Language bar ---------------------------------------------------------
+
+    def _build_language_bar(self, layout: QHBoxLayout):
+        """Create the official language buttons (autonyms)."""
+        layout.addWidget(QLabel("Language:"))
+        self._lang_buttons: List[QToolButton] = []
+
+        for lang_id, display in self._official_langs:
+            btn = QToolButton()
+            btn.setText(display)
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)  # radio-like behavior
+            if lang_id == self.current_language_id:
+                btn.setChecked(True)
+            btn.clicked.connect(lambda _=False, lid=lang_id: self._on_language_selected(lid))
+            self._lang_buttons.append(btn)
+            layout.addWidget(btn)
+
+        layout.addStretch()
+
+    def _on_language_selected(self, lang_id: int):
+        """Set language and reload current Pokémon."""
+        if self.current_language_id == lang_id:
+            return
+        self.current_language_id = lang_id
+
+        if self.current_identifier:
+            current_form = self.form_combo.currentText().strip() or None if self.form_combo.count() > 0 else None
+            self._load_pokemon_data(identifier=self.current_identifier, form=current_form)
+
+    # -------------------- Data loading and UI binding --------------------------
 
     def _on_load_clicked(self):
-        """Handle the Load button click; fetch by name/number."""
         ident = self.input_name.text().strip()
         if not ident:
             QMessageBox.warning(self, "Pokédex", "Please type a Pokémon name or number.")
@@ -199,26 +294,16 @@ class PokedexWindow(QWidget):
         self._load_pokemon_data(identifier=ident, form=None)
 
     def _on_form_changed(self, form_text: str):
-        """Auto-apply selected form; base form is the Pokémon name."""
         if not self.current_identifier:
             return
-
-        # If the selected text equals the base form (Pokémon name), treat as default
-        if form_text == self._base_form_name:
-            self._load_pokemon_data(identifier=self.current_identifier, form=None)
-        else:
-            self._load_pokemon_data(identifier=self.current_identifier, form=form_text)
-
+        self._load_pokemon_data(identifier=self.current_identifier, form=(form_text or None))
 
     def _load_pokemon_data(self, identifier: str, form: str | None):
-        """Calls your API (typed_function) and binds the result to the UI."""
+        """Call API and bind to UI; always pass current language_id."""
         try:
-            # Preferred shape: typed_function.get_pokemon(...)
             if hasattr(api, "get_pokemon"):
-                data = api.get_pokemon(identifier, form=form)
+                data = api.get_pokemon(identifier, form=form, language_id=self.current_language_id)
             else:
-                # Fallback: typed_function returns a dict given identifier
-                # (adjust this to your real function signature if needed)
                 data = api(identifier)  # type: ignore
 
             if not isinstance(data, dict):
@@ -230,8 +315,8 @@ class PokedexWindow(QWidget):
             self._bind_stats(data.get("base_stats", {}))
             self._bind_evolution_line(data.get("evolution_line", []))
             self._bind_forms(identifier, data)
+            self._bind_pokedex_flavor(identifier)  # uses current language id
 
-            # Cries
             cries = data.get("cries") or []
             self.btn_play_cry.setEnabled(bool(cries))
             self.current_cry_index = 0
@@ -239,10 +324,9 @@ class PokedexWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error loading Pokémon", str(e))
 
-    # ---- Binders
+    # ---- Binders --------------------------------------------------------------
 
     def _bind_header(self, data: dict):
-        """Bind name, dex number and main sprite."""
         name = data.get("name", "Unknown")
         dex = data.get("dex_number", "—")
         self.lbl_name.setText(f"<b>{name}</b>")
@@ -256,15 +340,12 @@ class PokedexWindow(QWidget):
             self.lbl_sprite.setPixmap(pm)
             self.lbl_sprite.setText("")
 
-    def _bind_types(self, types: list[str]):
-        """Render type chips; clear and rebuild row."""
-        # Clear previous
+    def _bind_types(self, types: List[str]):
         while self.types_row.count() > 0:
             item = self.types_row.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        # Add new
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
         self.types_row.addStretch()
         for t in types:
             chip = QLabel(t)
@@ -275,56 +356,68 @@ class PokedexWindow(QWidget):
         self.types_row.addStretch()
 
     def _bind_stats(self, stats: dict):
-        """Bind base stats; accepts uppercase or lowercase keys."""
         for key, lbl in self.stats_labels.items():
             val = stats.get(key) or stats.get(key.lower()) or "—"
             lbl.setText(str(val))
 
-    def _bind_evolution_line(self, evo_list: list[dict]):
+    def _bind_evolution_line(self, evo_list: List[dict]):
         """Render evolution cards horizontally inside a scroll area."""
-        # Clear row
         while self.evo_row.count() > 0:
             item = self.evo_row.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        # Rebuild
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
         for node in evo_list:
-            w = self._make_evo_card(node.get("name", "?"), node.get("image"))
+            # NEW: also pass dex_number to the card
+            w = self._make_evo_card(
+                name=node.get("name", "?"),
+                image=node.get("image"),
+                dex_number=node.get("dex_number")
+            )
             self.evo_row.addWidget(w)
         self.evo_row.addStretch()
 
-    def _make_evo_card(self, name: str, image: str | None) -> QWidget:
-        """Create a small card with sprite, name and a button to open that Pokémon."""
+
+    def _make_evo_card(self, name: str, image: str | None, dex_number: int | None) -> QWidget:
+        """Create a small card with sprite, name, dex number and a button to open that Pokémon by dex number."""
         box = QVBoxLayout()
         img = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         pm = _load_pixmap(image, QSize(96, 96)) if image else QPixmap()
-        if pm.isNull():
-            img.setText("—")
-        else:
-            img.setPixmap(pm)
+        img.setPixmap(pm) if not pm.isNull() else img.setText("—")
+
         nm = QLabel(name, alignment=Qt.AlignmentFlag.AlignCenter)
         nm.setWordWrap(True)
 
-        # Clickable to load that Pokémon by name (adjust if you need to use IDs)
+        # NEW: show Dex number
+        dx = QLabel(f"Dex #: {dex_number}" if dex_number is not None else "Dex #: —",
+                    alignment=Qt.AlignmentFlag.AlignCenter)
+
         btn = QPushButton("View")
-        btn.clicked.connect(lambda: self._load_pokemon_data(identifier=name, form=None))
+        # NEW: load by dex number (fallback to name if missing)
+        if dex_number is not None:
+            btn.clicked.connect(lambda: self._load_pokemon_data(identifier=str(dex_number), form=None))
+        else:
+            btn.clicked.connect(lambda: self._load_pokemon_data(identifier=name, form=None))
 
         cont = QWidget()
         box.addWidget(img)
         box.addWidget(nm)
+        box.addWidget(dx)  # NEW: add dex label to the card
         box.addWidget(btn)
         cont.setLayout(box)
         cont.setMinimumWidth(120)
         return cont
 
-    def _bind_forms(self, identifier: str, data: dict):
-        """Populate combo with [base name] + other forms; keep selection stable."""
-        # Base form is the Pokémon's own name
-        base_name = data.get("name") or ""
-        self._base_form_name = base_name
 
-        # Fetch forms list (other/alternate forms)
+    # -------- Forms combo: keep stable order (frozen) --------
+    def _bind_forms(self, identifier: str, data: dict):
+        """Populate the forms combo box while keeping the ORIGINAL order stable."""
+
+        # If the species changed, reset the frozen order
+        if self._forms_cache_identifier != identifier:
+            self._forms_order = []
+
+        # Get the full list of forms
         forms = data.get("forms")
         if forms is None and hasattr(api, "get_available_forms"):
             try:
@@ -332,21 +425,23 @@ class PokedexWindow(QWidget):
             except Exception:
                 forms = None
 
-        # Normalize and ensure we don't duplicate the base name in 'forms'
-        forms = [str(f) for f in (forms or []) if str(f).strip() and str(f) != base_name]
+        # Normalize and deduplicate but preserve provider order
+        forms = [str(f).strip() for f in (forms or []) if str(f).strip()]
+        dedup_forms = list(dict.fromkeys(forms))
 
-        # If nothing changed (same identifier and same forms), don't rebuild
+        # Freeze the order once
+        if not self._forms_order:
+            self._forms_order = dedup_forms[:]
+
+        # Early-exit: nothing changed; just sync selection
         if (
             self._forms_cache_identifier == identifier
-            and self._forms_cache_list == forms
+            and self._forms_cache_list == self._forms_order
             and self.form_combo.count() > 0
         ):
-            # Ensure it's enabled if there is at least the base item
             self.form_combo.setEnabled(True)
-            # Also ensure the current selection reflects API's current form
-            current_form = data.get("form")
-            desired_text = base_name if not current_form else str(current_form)
-            if self.form_combo.currentText() != desired_text:
+            desired_text = self.form_combo.currentText().strip()
+            if desired_text and self.form_combo.currentText() != desired_text:
                 self.form_combo.blockSignals(True)
                 self.form_combo.setCurrentText(desired_text)
                 self.form_combo.blockSignals(False)
@@ -354,28 +449,80 @@ class PokedexWindow(QWidget):
 
         # Update cache
         self._forms_cache_identifier = identifier
-        self._forms_cache_list = forms
+        self._forms_cache_list = self._forms_order[:]
 
-        # Rebuild combo: first item is ALWAYS the base form (Pokémon name)
+        # Rebuild using frozen order
+        previous_choice = self.form_combo.currentText().strip() if self.form_combo.count() > 0 else ""
         self.form_combo.blockSignals(True)
         self.form_combo.clear()
-        self.form_combo.addItem(base_name)
-        for f in forms:
-            self.form_combo.addItem(f)
+        for item_text in self._forms_order:
+            self.form_combo.addItem(item_text)
         self.form_combo.setEnabled(True)
 
-        # Select current form reported by API (None/default -> base_name)
-        current_form = data.get("form")
-        desired_text = base_name if not current_form else str(current_form)
-        self.form_combo.setCurrentText(desired_text)
+        # Restore previous choice if present; otherwise keep first
+        if previous_choice and previous_choice in self._forms_order:
+            self.form_combo.setCurrentText(previous_choice)
+        elif self._forms_order:
+            self.form_combo.setCurrentText(self._forms_order[0])
 
         self.form_combo.blockSignals(False)
 
+    # -------- Pokédex flavor (version combo + text) --------
+    def _bind_pokedex_flavor(self, identifier: str, language_id: int | None = None):
+        """Fetch versions + flavor texts and bind to the UI block."""
+        self._flavor_versions = []
+        self._flavor_texts = []
 
-    # -------------------- Media --------------------
+        if not hasattr(api, "get_pokedex_flavor"):
+            self.dex_group.setEnabled(False)
+            self.dex_combo.clear()
+            self.lbl_flavor.setText("—")
+            return
+
+        try:
+            lang = self.current_language_id if language_id is None else language_id
+            res = api.get_pokedex_flavor(identifier, language_id=lang)
+            versions = res.get("versions") or []
+            texts = res.get("flavor_texts") or []
+
+            n = min(len(versions), len(texts))
+            versions = [str(v) for v in versions[:n]]
+            texts = [str(t).replace("\n", " ").replace("\f", " ") for t in texts[:n]]
+
+            if n == 0:
+                self.dex_group.setEnabled(False)
+                self.dex_combo.clear()
+                self.lbl_flavor.setText("—")
+                return
+
+            self._flavor_versions = versions
+            self._flavor_texts = texts
+
+            self.dex_combo.blockSignals(True)
+            self.dex_combo.clear()
+            for i, v in enumerate(versions):
+                self.dex_combo.addItem(v, userData=i)
+            self.dex_combo.setCurrentIndex(0)
+            self.dex_combo.blockSignals(False)
+
+            self.lbl_flavor.setText(texts[0])
+            self.dex_group.setEnabled(True)
+            self.dex_combo.setEnabled(True)
+
+        except Exception:
+            self.dex_group.setEnabled(False)
+            self.dex_combo.clear()
+            self.lbl_flavor.setText("—")
+
+    def _on_pokedex_version_changed(self, idx: int):
+        if not self._flavor_texts:
+            return
+        if 0 <= idx < len(self._flavor_texts):
+            self.lbl_flavor.setText(self._flavor_texts[idx])
+
+    # ---- Media ----------------------------------------------------------------
 
     def _on_play_cry_clicked(self):
-        """Play next cry in sequence."""
         cries = self.current_data.get("cries") or []
         if not cries:
             return
@@ -384,7 +531,6 @@ class PokedexWindow(QWidget):
         self._play_audio(url)
 
     def _play_audio(self, url_or_path: str):
-        """Play audio from URL or local path."""
         try:
             if url_or_path.startswith(("http://", "https://")):
                 self.player.setSource(QUrl(url_or_path))
@@ -396,8 +542,9 @@ class PokedexWindow(QWidget):
             QMessageBox.warning(self, "Audio", f"Could not play cry:\n{e}")
 
 
+# ---- Entrypoint ---------------------------------------------------------------
+
 def run():
-    """Main entrypoint."""
     app = QApplication(sys.argv)
     w = PokedexWindow()
     w.show()

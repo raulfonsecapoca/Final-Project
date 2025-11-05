@@ -17,6 +17,12 @@ stats_df = pd.read_csv("data/csv/stats.csv")
 
 pokemon_forms_df = pd.read_csv("data/csv/pokemon_forms.csv")
 
+
+pokemon_species_flavor_text_df = pd.read_csv("data/csv/pokemon_species_flavor_text.csv")
+versions_df = pd.read_csv("data/csv/versions.csv")
+languages_df = pd.read_csv("data/csv/languages.csv")
+pokemon_species_names_df = pd.read_csv("data/csv/pokemon_species_names.csv") # for localized names
+
 class typed_function:
 
     '''
@@ -33,7 +39,7 @@ class typed_function:
 
 
     @staticmethod
-    def get_pokemon(identifier, form=None):
+    def get_pokemon(identifier, form=None, language_id=9):
         # identifier can be DexNum (25) or name ("pikachu")
 
         if isinstance(identifier, str):
@@ -95,10 +101,16 @@ class typed_function:
         for pid in evolution_chain_id_list:
             pok = pokemon_df[pokemon_df["id"] == pid]
             if not pok.empty:
-                name = pok["identifier"].values[0]
+                name = pokemon_species_names_df[(pokemon_species_names_df["pokemon_species_id"] == pid)]
+                name = name[name["local_language_id"] == language_id]
+                if not name.empty:
+                    name = name["name"].values[0]
+                else:
+                    name = pok["identifier"].values[0]
                 pokemon_evolution_line_list.append({
                     "name": name,
-                    "image": f"data/sprites/sprites/pokemon/{int(pid)}.png"
+                    "image": f"data/sprites/sprites/pokemon/{int(pid)}.png",
+                    "dex_number": pok["species_id"].values[0]
                 })
 
 
@@ -109,9 +121,17 @@ class typed_function:
         pokemon_forms_list = pokemon_df[pokemon_df["species_id"] == pokemon_dexNum]["identifier"].tolist()
 
 
+        pokemon_localized_name = pokemon_species_names_df[(pokemon_species_names_df["pokemon_species_id"] == pokemon_dexNum)]
+        pokemon_localized_name = pokemon_localized_name[pokemon_localized_name["local_language_id"] == language_id]
+
+        if not pokemon_localized_name.empty:
+            pokemon_localized_name = pokemon_localized_name["name"].values[0]
+        else:
+            pokemon_localized_name = p["identifier"].capitalize()
+        
 
         return {
-            "name": p["identifier"],
+            "name": pokemon_localized_name,
             "dex_number": p["species_id"],
             "image": f"data/sprites/sprites/pokemon/{int(p['id'])}.png",
             "cries": [f"data/cries/cries/pokemon/latest/{int(p['id'])}.ogg"],
@@ -151,6 +171,43 @@ class typed_function:
         pokemon_dexNum = p["species_id"]
         pokemon_forms_list = pokemon_df[pokemon_df["species_id"] == pokemon_dexNum]["identifier"].tolist()
         return pokemon_forms_list
+    
+
+    @staticmethod
+    def get_pokedex_flavor(identifier, language_id=9):
+
+
+        if isinstance(identifier, str):
+            try:
+                id = int(identifier)
+                pokemon = pokemon_df[pokemon_df["id"] == id]
+            except ValueError:
+                pokemon = pokemon_df[pokemon_df["identifier"].str.lower() == identifier.lower()]
+        else:
+            pokemon = pokemon_df[pokemon_df["id"] == identifier]
+            dex = pokemon["id"].values[0] if not pokemon.empty else None
+
+        if pokemon.empty:
+            raise ValueError(f"Pokémon '{identifier}' not found")
+
+
+        p = pokemon.iloc[0]
+        p = pokemon_df[pokemon_df["id"] == p["id"]].iloc[0]
+        pokemon_dexNum = p["species_id"]
+
+
+        flavor_dataframe = pokemon_species_flavor_text_df[pokemon_species_flavor_text_df["language_id"] == language_id]
+        flavor_dataframe = flavor_dataframe[flavor_dataframe["species_id"] == pokemon_dexNum]
+
+
+        versions_list = versions_df[versions_df["id"].isin(flavor_dataframe["version_id"].values.tolist())]["identifier"].tolist()
+        flavor_texts_list = flavor_dataframe["flavor_text"].values.tolist()
+
+
+        return {
+            "versions": versions_list,
+            "flavor_texts": flavor_texts_list
+        }
 
 
 
