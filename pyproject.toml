@@ -3,21 +3,20 @@ name = "pokedex-api-project"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "Raul Pacheco", email = "raul.pacheco@example.com"},
-    {name = "Juan Diego Zuniga Vargas", email = "juan.zuniga@example.com"}
+    {name = "Raul Pacheco", email = "r251968@dac.unicamp.br"},
+    {name = "Juan Diego Zuniga Vargas", email = "jzunigav@unal.edu.co"}
 ]
 requires-python = ">=3.10, <3.14"
 readme = "README.md"
 dependencies = [
     "pandas[parquet]>=2,<3",
-    "nicegui[native]>=2,<3",
     "pyside6"
+    
 ]
 
 
 [project.scripts]
-main_ng = "pokedex.main_nicegui:run"
-main_qt = "pokedex.main_qt:run"
+pokedex = "pokedex.main_qt:run"
 
 [dependency-groups]
 test = [
@@ -27,6 +26,7 @@ test = [
     "ipykernel>=6.29.0,<7",
     "ipywidgets>=8.0.3,<9",
     "pytest-xdist>=3.6.1,<4",
+    "coverage>=7.11.0",
 ]
 docs = [
     "Sphinx>=8.0.0,<9",

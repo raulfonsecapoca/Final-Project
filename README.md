@@ -6,18 +6,6 @@ This project was started with [supopo-pai-cookiecutter-template](https://github.
 
 ⚠️ Chose one of the two method below, and remove the other one.
 
-### How to run with NiceGUI
-
-```bash
-uv run main_ng
-```
-
-You can also run in development mode, which will reload the interface when it see code
-changes.
-
-```bash
-uv run python numpy/main_nicegui.py
-```
 
 ### How to run with PySide
 
