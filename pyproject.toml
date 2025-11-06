@@ -2,7 +2,10 @@
 name = "pokedex-api-project"
 version = "0.1.0"
 description = ""
-authors = [Raul Fonseca Poca, Juan Diego Zuniga Vargas]
+authors = [
+    {name = "Raul Pacheco", email = "raul.pacheco@example.com"},
+    {name = "Juan Diego Zuniga Vargas", email = "juan.zuniga@example.com"}
+]
 requires-python = ">=3.10, <3.14"
 readme = "README.md"
 dependencies = [
@@ -13,8 +16,8 @@ dependencies = [
 
 
 [project.scripts]
-main_ng = "numpy.main_nicegui:run"
-main_qt = "numpy.main_qt:run"
+main_ng = "pokedex.main_nicegui:run"
+main_qt = "pokedex.main_qt:run"
 
 [dependency-groups]
 test = [
@@ -45,10 +48,10 @@ default-groups = [
 ]
 
 [tool.hatch.build.targets.sdist]
-include = ["numpy"]
+include = ["pokedex"]
 
 [tool.hatch.build.targets.wheel]
-include = ["numpy"]
+include = ["pokedex"]
 
 [build-system]
 requires = ["hatchling"]
@@ -68,4 +71,4 @@ addopts = "--import-mode=importlib --doctest-modules"
 testpaths = ["test_numpy", "numpy"]
 
 [tool.coverage.run]
-source = ["numpy"]
+source = ["pokedex"]

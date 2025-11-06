@@ -133,7 +133,8 @@ class typed_function:
         return {
             "name": pokemon_localized_name,
             "dex_number": p["species_id"],
-            "image": f"data/sprites/sprites/pokemon/{int(p['id'])}.png",
+            #"image": f"data/sprites/sprites/pokemon/{int(p['id'])}.png",
+            "image": f"data/sprites/sprites/pokemon/other/home/{int(p['id'])}.png",
             "cries": [f"data/cries/cries/pokemon/latest/{int(p['id'])}.ogg"],
             "types": type_names.split(", "),
             "base_stats": {
