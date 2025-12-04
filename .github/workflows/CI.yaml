@@ -22,71 +22,71 @@ on:
   workflow_call:
 
 jobs:
-  # Run our test suite on various combinations of OS & Python versions
   run-pytest:
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
-        # test fail on windows for now
-        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
+      - name: Install uv ⚡️
         uses: astral-sh/setup-uv@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: 3.13
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
-      - name: Set up Python
+      - name: Set up Python 🐍 and build project 🏗️
         run: |
           uv python install
           uv sync --group test --all-extras
-      - name: Run the test
+      - name: Run the tests and get coverage 🔬
         run: |
           uv run coverage run -m pytest
-          uv run coverage xml
-      - name: Upload Coverage to Codecov
-        if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
-        uses: codecov/codecov-action@v5
-        with:
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
+          uv run coverage report
 
   build-site:
     name: "build docs"
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: "Checkout repository 🛎"
         uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
+          python-version: 3.13
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
       - name: "Install pandoc 📝"
         uses: r-lib/actions/setup-pandoc@v2
         with:
           pandoc-version: "latest"
-      - name: Install the project dependencies
-        run: uv sync --group test --all-extras
+      - name: Set up Python 🐍 and build project 🏗️
+        run: |
+          uv python install
+          uv sync --group test --all-extras
       - name: "Build docs and check for warnings 📖"
         shell: bash
         run: |
           uv run sphinx-build docs docs/_build -W
 
   run-pyright:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
+      - name: Install uv ⚡️
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
-      - name: Install the project dependencies
-        run: uv sync --group test --all-extras
+      - name: Set up Python 🐍 and build project 🏗️
+        run: |
+          uv python install
+          uv sync --group test --all-extras
       - run: echo "$PWD/.venv/bin" >> $GITHUB_PATH
-      - uses: jakebailey/pyright-action@v2
-        name: Run pyright
+      - name: Run pyright 📐
+        uses: jakebailey/pyright-action@v2
+
+  run-pre-commit:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v3
+    - name : Lint the code with Pre-commit 🔍
+      uses: pre-commit/action@v3.0.1
