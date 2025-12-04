@@ -16,10 +16,11 @@ from typing import List, Tuple
 
 import requests
 import pandas as pd
-from PySide6.QtCore import Qt, QSize, QUrl
+from PySide6.QtCore import Qt, QSize, QUrl, QStringListModel
 from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QCompleter,
     QWidget,
     QLabel,
     QPushButton,
@@ -42,6 +43,9 @@ from pokedex.my_module import typed_function as api  # your data provider
 # ---- CSVs for language metadata (used only for the language buttons) ---------
 language_names_df = pd.read_csv("data/csv/language_names.csv")
 languages_df = pd.read_csv("data/csv/languages.csv")
+pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
+pokemon_species_names_df = pd.read_csv("data/csv/pokemon_species_names.csv") # for localized names
+
 
 
 # ---- Helpers -----------------------------------------------------------------
@@ -253,6 +257,10 @@ class PokedexWindow(QWidget):
         self._flavor_versions: List[str] = []
         self._flavor_texts: List[str] = []
 
+        # Self autocomplete of the searching bar
+        self._init_autocomplete()
+
+
     # ---- Language bar ---------------------------------------------------------
 
     def _build_language_bar(self, layout: QHBoxLayout):
@@ -323,7 +331,7 @@ class PokedexWindow(QWidget):
 
         except Exception as e:
             QMessageBox.critical(self, "Error loading Pokémon", str(e))
-
+            
     # ---- Binders --------------------------------------------------------------
 
     def _bind_header(self, data: dict):
@@ -540,6 +548,37 @@ class PokedexWindow(QWidget):
             self.player.play()
         except Exception as e:
             QMessageBox.warning(self, "Audio", f"Could not play cry:\n{e}")
+
+    def _init_autocomplete(self):
+        all_names = self._get_all_pokemon_names()
+        self._all_pokemon_names = sorted(set(all_names), key=str.casefold)
+        self._completer_model= QStringListModel(self._all_pokemon_names,self)
+        self._completer= QCompleter(self._completer_model,self)
+        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
+        self.input_name.setCompleter(self._completer)
+
+        self.input_name.textEdited.connect(self._on_search_text_edited)
+        self.input_name.returnPressed.connect(self._on_load_clicked)
+
+    def _get_all_pokemon_names(self) -> list[str]:
+        """Fetch all Pokémon names for autocomplete."""
+        lang= self.current_language_id
+        df=pokemon_species_names_df[pokemon_species_names_df['local_language_id']==lang]
+        if df.empty:
+            return pokemon_species_df['identifier'].str.capitalize().tolist()
+        return df['name'].tolist()
+
+    def _on_search_text_edited(self, text: str):
+        """Update completer model based on current text."""
+        pattern = text.str().casefold()
+        if not pattern:
+            self._completer_model.setStringList([])
+            return
+        matches = [name for name in self._all_pokemon_names if name.casefold().startswith(pattern)]
+        self._completer_model.setStringList(matches[:10])
+    
 
 
 # ---- Entrypoint ---------------------------------------------------------------
