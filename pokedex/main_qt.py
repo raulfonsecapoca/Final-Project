@@ -597,6 +597,7 @@ class PokedexWindow(QWidget):
 
     def _on_search_text_edited(self, text: str):
         """Update completer model based on current text."""
+
         #pattern = text.str().casefold()
         pattern = text.strip().casefold()
 

@@ -12,6 +12,7 @@ pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
 
 pokemon_types_df = pd.read_csv("data/csv/pokemon_types.csv")
 types_df = pd.read_csv("data/csv/types.csv")
+#types_sprites_df= pd.read_csv("data/sprites/sprites/types/generation-ix/scarlet-violet.csv")
 
 pokemon_stats_df = pd.read_csv("data/csv/pokemon_stats.csv")
 stats_df = pd.read_csv("data/csv/stats.csv")
