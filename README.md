@@ -7,10 +7,10 @@ This project was started with [supopo-pai-cookiecutter-template](https://github.
 ⚠️ Chose one of the two method below, and remove the other one.
 
 
-### How to run with PySide
+### How to run
 
 ```bash
-uv run main_qt
+uv run pokedex
 ```
 
 ## Development
