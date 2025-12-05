@@ -12,7 +12,6 @@ pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
 
 pokemon_types_df = pd.read_csv("data/csv/pokemon_types.csv")
 types_df = pd.read_csv("data/csv/types.csv")
-types_sprites_df= pd.read_csv("data/sprites/sprites/types/generation-ix/scarlet-violet.csv")
 
 pokemon_stats_df = pd.read_csv("data/csv/pokemon_stats.csv")
 stats_df = pd.read_csv("data/csv/stats.csv")
@@ -138,7 +137,8 @@ class typed_function:
             #"image": f"data/sprites/sprites/pokemon/{int(p['id'])}.png",
             "image": f"data/sprites/sprites/pokemon/other/home/{int(p['id'])}.png",
             "cries": [f"data/cries/cries/pokemon/latest/{int(p['id'])}.ogg"],
-            "types": type_names.split(", "),
+            #"types": type_names.split(", "),
+            "types": pokemon_types_list,
             "base_stats": {
                 "HP": stats_list[stats_list["stat_id"] == 1]["base_stat"].values[0],
                 "Atk": stats_list[stats_list["stat_id"] == 2]["base_stat"].values[0],

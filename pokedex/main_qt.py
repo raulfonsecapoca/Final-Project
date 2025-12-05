@@ -13,6 +13,7 @@ This file expects pokedex.my_module.typed_function to expose:
 import sys
 import os
 from typing import List, Tuple
+from pathlib import Path
 
 import requests
 import pandas as pd
@@ -45,6 +46,9 @@ language_names_df = pd.read_csv("data/csv/language_names.csv")
 languages_df = pd.read_csv("data/csv/languages.csv")
 pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
 pokemon_species_names_df = pd.read_csv("data/csv/pokemon_species_names.csv") # for localized names
+
+BASE_DIR = Path(__file__).resolve().parent.parent  # Final-Project/
+TYPE_ICON_DIR = BASE_DIR / "data" / "sprites" / "sprites" / "types" / "generation-ix" / "scarlet-violet"
 
 
 
@@ -348,20 +352,41 @@ class PokedexWindow(QWidget):
             self.lbl_sprite.setPixmap(pm)
             self.lbl_sprite.setText("")
 
-    def _bind_types(self, types: List[str]):
+    def _bind_types(self, types: list):
+        """Mostrar los tipos como iconos, usando los ids que vienen en 'types'."""
+        # limpiar layout    
         while self.types_row.count() > 0:
             item = self.types_row.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
+
         self.types_row.addStretch()
+
         for t in types:
-            chip = QLabel(t)
-            chip.setStyleSheet(
-                "QLabel { padding: 4px 8px; border-radius: 12px; border: 1px solid #999; }"
-            )
-            self.types_row.addWidget(chip, 0)
+            # t debería ser un número de tipo (por ejemplo 10)
+            try:
+                type_id = int(t)
+            except (TypeError, ValueError):
+            # si viene algo raro, lo mostramos como texto
+                lbl = QLabel(str(t))
+                self.types_row.addWidget(lbl)
+                continue
+
+            icon_path = TYPE_ICON_DIR / f"{type_id}.png"
+
+            lbl = QLabel()
+            pm = QPixmap(str(icon_path))
+            if pm.isNull():
+                # si no se pudo cargar la imagen, mostramos el id como texto
+                lbl.setText(str(type_id))
+            else:
+                lbl.setPixmap(pm)
+
+            self.types_row.addWidget(lbl)
+
         self.types_row.addStretch()
+
 
     def _bind_stats(self, stats: dict):
         for key, lbl in self.stats_labels.items():
@@ -572,7 +597,9 @@ class PokedexWindow(QWidget):
 
     def _on_search_text_edited(self, text: str):
         """Update completer model based on current text."""
-        pattern = text.str().casefold()
+        #pattern = text.str().casefold()
+        pattern = text.strip().casefold()
+
         if not pattern:
             self._completer_model.setStringList([])
             return
