@@ -11,7 +11,7 @@ readme = "README.md"
 dependencies = [
     "pandas[parquet]>=2,<3",
     "pyside6"
-    
+
 ]
 
 

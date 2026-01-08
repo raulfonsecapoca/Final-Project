@@ -1,7 +1,7 @@
-import numpy as np
-
-from pokedex.my_module import typed_function
+from pokedex.my_module import PokedexAPI
 
 
-def test_typed_function():
-    assert not typed_function(np.zeros(10), "")
+def test_get_pokemon():
+    api_instance = PokedexAPI()
+    result = api_instance.get_pokemon("pikachu")
+    assert isinstance(result, dict)
