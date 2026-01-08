@@ -8,4 +8,4 @@ Functional API
    :recursive:
    :caption: API
 
-   numpy
+   pokedex

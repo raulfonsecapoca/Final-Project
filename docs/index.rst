@@ -7,7 +7,6 @@ Welcome to Pokedex documentation!
    :caption: Contents:
 
    pokedex
-   notebooks
    readme
 
 Indices and tables

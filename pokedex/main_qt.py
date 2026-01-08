@@ -1,30 +1,31 @@
 # main_qt.py
-"""
-Pokédex app UI using PySide6.
+# """
+# Pokédex app UI using PySide6.
 
-This file expects pokedex.my_module.typed_function to expose:
-- get_pokemon(identifier: str, form: str | None = None, language_id: int = 9) -> dict
-  returning keys:
-    name, dex_number, image, cries (list[str]), types (list[int|str]),
-    base_stats (dict[str,int]), evolution_line (list[dict{name,image,dex_number}]),
-    forms (list[str]|optional)
-  NEW keys recommended:
-    abilities (list[str]|optional)
-    egg_groups (list[str]|optional)
+# This file expects pokedex.my_module.typed_function to expose:
 
-- (optional) get_available_forms(identifier) -> list[str]
-- (optional) get_pokedex_flavor(identifier: str, language_id: int = 9)
-  returning {"versions": list, "flavor_texts": list}
+# - get_pokemon(identifier: str, form: str | None = None, language_id: int = 9) -> dict
+#   - returning keys:
+#     - name, dex_number, image, cries (list[str]), types (list[int|str]),
+#     - base_stats (dict[str,int]), evolution_line (list[dict{name,image,dex_number}]),
+#     - forms (list[str]|optional)
+#   - NEW keys recommended:
+#     - abilities (list[str]|optional)
+#     - egg_groups (list[str]|optional)
 
-NEW (stubs you implement for the UI to fully work):
-- get_ability_description(ability: str, language_id: int = 9) -> str
-- get_all_types(language_id: int = 9) -> list[str] or list[tuple[str,str]]
-- get_all_abilities(language_id: int = 9) -> list[str] or list[tuple[str,str]]
-- get_all_egg_groups(language_id: int = 9) -> list[str] or list[tuple[str,str]]
-- get_stat_rank(identifier: str, stat_key: str, language_id: int = 9, type_filter: str | None = None) -> dict
-- count_pokemon_with_ability(ability: str, type_filter: str | None = None) -> int
-- count_pokemon_in_egg_group(egg_group: str, type_filter: str | None = None) -> int
-"""
+# - (optional) get_available_forms(identifier) -> list[str]
+# - (optional) get_pokedex_flavor(identifier: str, language_id: int = 9)
+#   returning {"versions": list, "flavor_texts": list}
+
+# NEW (stubs you implement for the UI to fully work):
+# - get_ability_description(ability: str, language_id: int = 9) -> str
+# - get_all_types(language_id: int = 9) -> list[str] or list[tuple[str,str]]
+# - get_all_abilities(language_id: int = 9) -> list[str] or list[tuple[str,str]]
+# - get_all_egg_groups(language_id: int = 9) -> list[str] or list[tuple[str,str]]
+# - get_stat_rank(identifier: str, stat_key: str, language_id: int = 9, type_filter: str | None = None) -> dict
+# - count_pokemon_with_ability(ability: str, type_filter: str | None = None) -> int
+# - count_pokemon_in_egg_group(egg_group: str, type_filter: str | None = None) -> int
+# """
 
 import os
 import sys
@@ -1030,6 +1031,38 @@ class PokedexWindow(QWidget):
 
 
 def run():
+    r"""This is a typed function.
+    This docstring is made so that it renders nicely on sphinx. It features notes,
+    arguments, cross references (here, to numpy documentation), maths and examples.
+
+    Notes:
+        - This is a section with multiple notes
+        - This second note has maths! :math:`p \in \mathbb{N}`
+
+    .. math::
+        :label: equation1
+
+        D = \sum_{0 \le i < p} \alpha_i
+
+    Args:
+        a: first parameter, its description is really, and fits in
+            two lines (note the indentation). The object must be a :obj:`np.ndarray`
+        b: second parameter. Defaults to empty string.
+
+    Examples
+        >>> typed_function(np.zeros(10))
+        False
+
+        >>> typed_function(
+        ...     np.zeros(10),
+        ...     "hello"
+        ... )
+        False
+
+    Returns:
+        Always return False, it's not a very interesting function. See :eq:`equation1`
+        for some more maths.
+    """
     app = QApplication(sys.argv)
     w = PokedexWindow()
     w.show()
