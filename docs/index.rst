@@ -6,7 +6,7 @@ Welcome to Pokedex documentation!
    :maxdepth: 2
    :caption: Contents:
 
-   numpy
+   pokedex
    notebooks
    readme
 
