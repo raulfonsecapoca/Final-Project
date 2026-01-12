@@ -2,6 +2,8 @@
 sphinx and the right syntaxe for docstrings.
 """
 
+from dataclasses import dataclass
+
 import pandas as pd
 
 pokemon_df = pd.read_csv("data/csv/pokemon.csv")
@@ -11,6 +13,7 @@ pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
 
 pokemon_types_df = pd.read_csv("data/csv/pokemon_types.csv")
 types_df = pd.read_csv("data/csv/types.csv")
+type_names_df = pd.read_csv("data/csv/type_names.csv")
 # types_sprites_df= pd.read_csv("data/sprites/sprites/types/generation-ix/scarlet-violet.csv")
 
 pokemon_stats_df = pd.read_csv("data/csv/pokemon_stats.csv")
@@ -33,6 +36,17 @@ egg_groups_prose_df = pd.read_csv("data/csv/egg_group_prose.csv")
 pokemon_abilities_df = pd.read_csv("data/csv/pokemon_abilities.csv")
 ability_names_df = pd.read_csv("data/csv/ability_names.csv")
 ability_flavor_text_df = pd.read_csv("data/csv/ability_flavor_text.csv")
+
+generation_names_df = pd.read_csv("data/csv/generation_names.csv")
+
+
+@dataclass(frozen=True)
+class ChartData:
+    title: str
+    labels: list[str]
+    values: list[int]
+    total: int
+    meta: dict[str, str]
 
 
 class PokedexAPI:
@@ -341,11 +355,142 @@ class PokedexAPI:
 
         return text
 
-    #### Statistics functions
+    @staticmethod
+    def get_type_chart(
+        language_id: int = 9,
+        forms_enable: bool = False,
+        generations_enable: list[bool] | None = None,
+    ) -> ChartData:
+        if generations_enable is None:
+            generations_enable = [True] * 9
+
+        if not forms_enable:
+            pokemon_types_df_filtered = pokemon_types_df[
+                pokemon_types_df["pokemon_id"] <= 10000
+            ]
+        else:
+            pokemon_types_df_filtered = pokemon_types_df
+
+        for gen_index, gen_enabled in enumerate(generations_enable):
+            if not gen_enabled:
+                pokemon_species_df_filtered = pokemon_species_df[
+                    pokemon_species_df["generation_id"] == (gen_index + 1)
+                ]
+
+                pokemon_ids_to_exclude = pokemon_species_df_filtered["id"].tolist()
+
+                pokemon_df_filtered = pokemon_df[
+                    pokemon_df["species_id"].isin(pokemon_ids_to_exclude)
+                ]
+
+                pokemon_types_df_filtered = pokemon_types_df_filtered[
+                    ~pokemon_types_df_filtered["pokemon_id"].isin(
+                        pokemon_df_filtered["id"]
+                    )
+                ]
+
+        count_by_type = pokemon_types_df_filtered["type_id"].value_counts().to_dict()
+
+        labels = list(count_by_type.keys())
+        out: list[str] = []
+        for label in labels:
+            s = type_names_df[
+                (type_names_df["type_id"] == label)
+                & (type_names_df["local_language_id"] == language_id)
+            ]["name"]
+
+            if s.empty:
+                s = type_names_df[
+                    (type_names_df["type_id"] == label)
+                    & (type_names_df["local_language_id"] == 9)
+                ]["name"]
+
+            out.append(str(s.iloc[0]))
+        labels = out
+
+        values = list(count_by_type.values())
+        total = pokemon_types_df_filtered["pokemon_id"].nunique()
+
+        return ChartData(
+            title="Type Chart",
+            labels=labels,
+            values=values,
+            total=total,
+            meta={"description": "Type chart for all types"},
+        )
+
+    @staticmethod
+    def get_gen_chart(
+        language_id: int = 9,
+        type_filter: str | None = None,
+    ) -> ChartData:
+        if type_filter is None:
+            type_id_filter = None
+        else:
+            type_row = types_df[
+                types_df["identifier"].str.lower() == type_filter.lower()
+            ]
+            if type_row.empty:
+                raise ValueError(f"Type '{type_filter}' not found")
+            type_id_filter = int(type_row["id"].iloc[0])
+
+        pokemon_types_df_filtered = pokemon_types_df[
+            pokemon_types_df["pokemon_id"] <= 10000
+        ]
+
+        pokemon_filtered = pokemon_types_df_filtered["pokemon_id"].tolist()
+        if type_id_filter is not None:
+            pokemon_filtered = pokemon_types_df_filtered[
+                pokemon_types_df_filtered["type_id"] == type_id_filter
+            ]["pokemon_id"].tolist()
+
+        pokemon_df_filtered = pokemon_df[pokemon_df["id"].isin(pokemon_filtered)]
+        pokemon_species_df_filtered = pokemon_species_df[
+            pokemon_species_df["id"].isin(pokemon_filtered)
+        ]
+
+        count_by_gen = (
+            pokemon_species_df_filtered["generation_id"].value_counts().to_dict()
+        )
+
+        labels = list(count_by_gen.keys())
+        out: list[str] = []
+        for label in labels:
+            s = generation_names_df[
+                (generation_names_df["generation_id"] == label)
+                & (generation_names_df["local_language_id"] == language_id)
+            ]["name"]
+
+            if s.empty:
+                s = generation_names_df[
+                    (generation_names_df["generation_id"] == label)
+                    & (generation_names_df["local_language_id"] == 9)
+                ]["name"]
+
+            out.append(str(s.iloc[0]))
+        labels = out
+
+        values = list(count_by_gen.values())
+        total = pokemon_df_filtered["species_id"].nunique()
+
+        return ChartData(
+            title="Generation Chart",
+            labels=labels,
+            values=values,
+            total=total,
+            meta={"description": "Generation chart for all generations"},
+        )
 
     @staticmethod
     def get_all_types(language_id: int = 9) -> list[tuple[str, str]] | list[str]:
-        return ["water", "fire", "grass"]
+        types_df_filtered = types_df[types_df["id"] <= 18]["id"].tolist()
+
+        type_names_list = type_names_df[
+            (type_names_df["local_language_id"] == language_id)
+            & (type_names_df["type_id"].isin(types_df_filtered))
+        ]["name"].tolist()
+
+        return type_names_list
 
     @staticmethod
     def get_all_abilities(language_id: int = 9) -> list[str] | list[tuple[str, str]]:

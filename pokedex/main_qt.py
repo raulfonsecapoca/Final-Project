@@ -27,6 +27,7 @@
 # - count_pokemon_in_egg_group(egg_group: str, type_filter: str | None = None) -> int
 # """
 
+import math
 import os
 import sys
 from itertools import zip_longest
@@ -34,11 +35,13 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+from PySide6.QtCharts import QChart, QChartView, QPieSeries, QPieSlice
 from PySide6.QtCore import QSize, QStringListModel, Qt, QUrl
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QCompleter,
     QFrame,
@@ -77,6 +80,28 @@ TYPE_ICON_DIR = (
     / "generation-ix"
     / "scarlet-violet"
 )
+
+# Type identifiers in the canonical Pokédex order (type_id 1..18).
+TYPE_IDENTIFIERS: list[str] = [
+    "normal",
+    "fighting",
+    "flying",
+    "poison",
+    "ground",
+    "rock",
+    "bug",
+    "ghost",
+    "steel",
+    "fire",
+    "water",
+    "grass",
+    "electric",
+    "psychic",
+    "ice",
+    "dragon",
+    "dark",
+    "fairy",
+]
 
 
 # ---- Helpers -----------------------------------------------------------------
@@ -363,13 +388,19 @@ class PokedexWindow(QWidget):
 
     def _build_statistics_tab(self):
         self.stats_tabs = QTabWidget()
+
+        self.stats_tab_general = QWidget()
         self.stats_tab_pokemon = QWidget()
         self.stats_tab_egg = QWidget()
         self.stats_tab_abilities = QWidget()
 
+        self.stats_tabs.addTab(self.stats_tab_general, "General Statistics")
         self.stats_tabs.addTab(self.stats_tab_pokemon, "Pokemon")
         self.stats_tabs.addTab(self.stats_tab_egg, "Egg Groups")
         self.stats_tabs.addTab(self.stats_tab_abilities, "Abilities")
+
+        # ---------------- Subtab: General Statistics ----------------
+        self._build_general_statistics_subtab()
 
         # ---------------- Subtab: Pokemon (Ranking) ----------------
         self.rank_group = QGroupBox("Stat Ranking (uses the top search bar)")
@@ -464,6 +495,386 @@ class PokedexWindow(QWidget):
         self.ability_search.returnPressed.connect(self._on_count_ability_clicked)
         self.egg_search.returnPressed.connect(self._on_count_egg_clicked)
 
+    def _build_general_statistics_subtab(self) -> None:
+        # ---------------- Type Chart (filters above) ----------------
+        type_box = QGroupBox("Type Chart")
+
+        # Type chart filters
+        self.chk_forms_enable = QCheckBox("Enable alternative forms")
+        self.chk_forms_enable.setChecked(False)
+
+        gens_box = QGroupBox("Generations")
+        gens_layout = QGridLayout()
+
+        self.gen_checkboxes: list[QCheckBox] = []
+        for i in range(1, 10):  # 1..9
+            cb = QCheckBox(f"Gen {i}")
+            cb.setChecked(True)
+            self.gen_checkboxes.append(cb)
+            r = (i - 1) // 3
+            c = (i - 1) % 3
+            gens_layout.addWidget(cb, r, c)
+
+        gens_box.setLayout(gens_layout)
+
+        self.btn_update_type_chart = QPushButton("Update Type Chart")
+
+        type_filters_layout = QVBoxLayout()
+        type_filters_layout.addWidget(self.chk_forms_enable)
+        type_filters_layout.addWidget(gens_box)
+        type_filters_layout.addWidget(self.btn_update_type_chart)
+
+        # Type chart view
+        self.type_chart_view = QChartView()
+        self.type_chart_view.setRenderHint(self.type_chart_view.renderHints())
+
+        self.lbl_type_chart_info = QLabel("—")
+        self.lbl_type_chart_info.setWordWrap(True)
+
+        type_layout = QVBoxLayout()
+        type_layout.addLayout(type_filters_layout)
+        type_layout.addWidget(self.type_chart_view, 1)
+        type_layout.addWidget(self.lbl_type_chart_info)
+        type_box.setLayout(type_layout)
+
+        # ---------------- Generation Chart (filters above) ----------------
+        gen_box = QGroupBox("Generation Chart")
+
+        self.gen_type_filter_combo = QComboBox()
+        self.btn_update_gen_chart = QPushButton("Update Gen Chart")
+
+        gen_filter_row = QHBoxLayout()
+        gen_filter_row.addWidget(QLabel("Type filter:"), 0)
+        gen_filter_row.addWidget(self.gen_type_filter_combo, 1)
+        gen_filter_row.addWidget(self.btn_update_gen_chart, 0)
+
+        self.gen_chart_view = QChartView()
+        self.gen_chart_view.setRenderHint(self.gen_chart_view.renderHints())
+
+        self.lbl_gen_chart_info = QLabel("—")
+        self.lbl_gen_chart_info.setWordWrap(True)
+
+        gen_layout = QVBoxLayout()
+        gen_layout.addLayout(gen_filter_row)
+        gen_layout.addWidget(self.gen_chart_view, 1)
+        gen_layout.addWidget(self.lbl_gen_chart_info)
+        gen_box.setLayout(gen_layout)
+
+        # ---------------- Page layout: two charts side-by-side ----------------
+        main_row = QHBoxLayout()
+        main_row.addWidget(type_box, 1)
+        main_row.addWidget(gen_box, 1)
+
+        layout = QVBoxLayout(self.stats_tab_general)
+        layout.addLayout(main_row, 1)
+
+        # ---------------- Signals ----------------
+        self.btn_update_type_chart.clicked.connect(self._on_update_type_chart_clicked)
+        self.chk_forms_enable.toggled.connect(self._on_update_type_chart_clicked)
+        for cb in self.gen_checkboxes:
+            cb.toggled.connect(self._on_update_type_chart_clicked)
+
+        self.btn_update_gen_chart.clicked.connect(self._on_update_gen_chart_clicked)
+        self.gen_type_filter_combo.currentIndexChanged.connect(
+            self._on_update_gen_chart_clicked
+        )
+
+        # Initial render
+        self._on_update_type_chart_clicked()
+        self._on_update_gen_chart_clicked()
+
+    # ---------- General statistics handlers ----------
+    def _on_update_type_chart_clicked(self) -> None:
+        if not hasattr(api, "get_type_chart"):
+            self.lbl_type_chart_info.setText("TODO: implement api.get_type_chart(...)")
+            self.type_chart_view.setChart(QChart())
+            return
+
+        forms_enable = self.chk_forms_enable.isChecked()
+        generations_enable = [cb.isChecked() for cb in self.gen_checkboxes]
+
+        try:
+            chart_data = api.get_type_chart(
+                language_id=self.current_language_id,
+                forms_enable=forms_enable,
+                generations_enable=generations_enable,
+            )
+            self._render_type_pie_chart(chart_data)
+        except Exception as e:
+            self.lbl_type_chart_info.setText(f"Error: {e}")
+            self.type_chart_view.setChart(QChart())
+
+    def _fill_gen_type_filter_combo(self) -> None:
+        """Fill the generation chart type filter with type identifiers as userData."""
+        if not hasattr(self, "gen_type_filter_combo"):
+            return
+
+        combo = self.gen_type_filter_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All types", userData=None)
+
+        # Try to use API catalog (preferred) but ensure userData stays an identifier.
+        if hasattr(api, "get_all_types"):
+            try:
+                items = api.get_all_types(language_id=self.current_language_id) or []
+                for it in items:
+                    # Accept ("id_or_identifier", "Localized Name") or plain strings.
+                    if isinstance(it, (list | tuple)) and len(it) >= 2:
+                        raw_key = str(it[0]).strip()
+                        label = str(it[1]).strip()
+                    else:
+                        raw_key = str(it).strip()
+                        label = raw_key
+
+                    identifier: str | None = None
+
+                    # If key is numeric, map 1..18 to canonical identifiers.
+                    if raw_key.isdigit():
+                        tid = int(raw_key)
+                        if 1 <= tid <= len(TYPE_IDENTIFIERS):
+                            identifier = TYPE_IDENTIFIERS[tid - 1]
+                    else:
+                        # Otherwise assume the API gives an identifier directly.
+                        identifier = raw_key.lower()
+
+                    if identifier:
+                        combo.addItem(label, userData=identifier)
+            except Exception:
+                # Fall back to fixed list below.
+                pass
+
+        # Fallback if nothing was added (or API missing/failed).
+        if combo.count() <= 1:
+            for ident in TYPE_IDENTIFIERS:
+                combo.addItem(ident.capitalize(), userData=ident)
+
+        combo.blockSignals(False)
+
+    def _on_update_gen_chart_clicked(self) -> None:
+        if not hasattr(api, "get_gen_chart"):
+            self.lbl_gen_chart_info.setText("TODO: implement api.get_gen_chart(...)")
+            self.gen_chart_view.setChart(QChart())
+            return
+
+        type_filter = None
+        if hasattr(self, "gen_type_filter_combo"):
+            type_filter = self.gen_type_filter_combo.currentData()
+
+        try:
+            chart_data = api.get_gen_chart(
+                language_id=self.current_language_id,
+                type_filter=type_filter,
+            )
+            self._render_gen_pie_chart(chart_data)
+        except Exception as e:
+            self.lbl_gen_chart_info.setText(f"Error: {e}")
+            self.gen_chart_view.setChart(QChart())
+
+    def _render_type_pie_chart(self, chart_data) -> None:
+        """
+        chart_data is expected to have:
+        - title: str
+        - labels: list[Any]
+        - values: list[int|float]
+        - total: int|float
+        - meta: dict (optional)
+        """
+
+        series = QPieSeries()
+
+        labels = getattr(chart_data, "labels", []) or []
+        values = getattr(chart_data, "values", []) or []
+
+        for label, value in zip(labels, values):
+            try:
+                v = float(value)
+            except Exception:
+                continue
+            if v <= 0:
+                continue
+
+            slice_ = series.append(str(label), v)
+
+            # label "type count" outside with arrow
+            count = int(v) if v.is_integer() else v
+            slice_.setLabel(f"{label} {count}")
+            slice_.setLabelVisible(True)
+            slice_.setLabelPosition(QPieSlice.LabelPosition.LabelOutside)
+
+            # default arm (we'll adjust later for small slices)
+            slice_.setLabelArmLengthFactor(0.15)
+
+        # 1) Make the pie slightly smaller to leave room for labels
+        # (if your QtCharts version doesn't have this, you can comment it out)
+        if hasattr(series, "setPieSize"):
+            series.setPieSize(0.65)
+
+        # 2) Heuristic to reduce overlap:
+        #    - group by side (right/left)
+        #    - sort top to bottom
+        #    - for small slices, increase the "arm" in steps
+        #    - optional: explode VERY small slices
+        right = []
+        left = []
+
+        for s in series.slices():
+            # Some Pylance stubs don't show these methods, but they exist at runtime.
+            if not (hasattr(s, "startAngle") and hasattr(s, "angleSpan")):
+                continue
+
+            mid = float(s.startAngle()) + float(s.angleSpan()) / 2.0
+            rad = math.radians(mid)
+
+            # side based on cosine
+            side_is_right = math.cos(rad) >= 0
+            y = math.sin(rad)  # "height" ordering
+
+            (right if side_is_right else left).append((y, s))
+
+        for side_list in (right, left):
+            side_list.sort(key=lambda t: t[0], reverse=True)  # top -> bottom
+
+            k = 0
+            for _, s in side_list:
+                pct = float(s.percentage()) if hasattr(s, "percentage") else 0.0
+
+                # adjust only for small slices (tune this)
+                if pct < 0.06:
+                    s.setLabelArmLengthFactor(0.15 + 0.03 * k)
+                    k += 1
+                else:
+                    s.setLabelArmLengthFactor(0.15)
+
+                # optional: explode VERY small slices to separate even more
+                if pct < 0.03 and hasattr(s, "setExploded"):
+                    s.setExploded(True)
+                    if hasattr(s, "setExplodeDistanceFactor"):
+                        s.setExplodeDistanceFactor(0.06)
+
+        chart = QChart()
+        chart.addSeries(series)
+        chart.setTitle(str(getattr(chart_data, "title", "Type Chart")))
+
+        # hide the top legend
+        chart.legend().setVisible(False)
+
+        # optional: add more breathing room around
+        if hasattr(chart, "setMargins"):
+            from PySide6.QtCore import QMargins
+
+            chart.setMargins(QMargins(20, 10, 20, 20))
+
+        self.type_chart_view.setChart(chart)
+
+        total = getattr(chart_data, "total", None)
+        meta = getattr(chart_data, "meta", {}) or {}
+        meta_text = (
+            ", ".join([f"{k}={v}" for k, v in meta.items()])
+            if isinstance(meta, dict)
+            else str(meta)
+        )
+
+        if total is not None:
+            self.lbl_type_chart_info.setText(
+                f"Total Pokémon counted: {total}\n{meta_text}"
+            )
+        else:
+            self.lbl_type_chart_info.setText(meta_text or "—")
+
+    def _render_gen_pie_chart(self, chart_data) -> None:
+        """
+        chart_data is expected to have:
+        - title: str
+        - labels: list[Any]
+        - values: list[int|float]
+        - total: int|float
+        - meta: dict (optional)
+        """
+        series = QPieSeries()
+
+        labels = getattr(chart_data, "labels", []) or []
+        values = getattr(chart_data, "values", []) or []
+
+        for label, value in zip(labels, values):
+            try:
+                v = float(value)
+            except Exception:
+                continue
+            if v <= 0:
+                continue
+
+            slice_ = series.append(str(label), v)
+
+            # label "gen count" outside with arrow
+            count = int(v) if v.is_integer() else v
+            slice_.setLabel(f"{label} {count}")
+            slice_.setLabelVisible(True)
+            slice_.setLabelPosition(QPieSlice.LabelPosition.LabelOutside)
+            slice_.setLabelArmLengthFactor(0.15)
+
+        # Make the pie slightly smaller to leave room for labels
+        if hasattr(series, "setPieSize"):
+            series.setPieSize(0.65)
+
+        # Heuristic to reduce overlap (same idea as type chart)
+        right = []
+        left = []
+        for s in series.slices():
+            if not (hasattr(s, "startAngle") and hasattr(s, "angleSpan")):
+                continue
+
+            mid = float(s.startAngle()) + float(s.angleSpan()) / 2.0
+            rad = math.radians(mid)
+
+            side_is_right = math.cos(rad) >= 0
+            y = math.sin(rad)
+            (right if side_is_right else left).append((y, s))
+
+        for side_list in (right, left):
+            side_list.sort(key=lambda t: t[0], reverse=True)
+            k = 0
+            for _, s in side_list:
+                pct = float(s.percentage()) if hasattr(s, "percentage") else 0.0
+
+                if pct < 0.06:
+                    s.setLabelArmLengthFactor(0.15 + 0.03 * k)
+                    k += 1
+                else:
+                    s.setLabelArmLengthFactor(0.15)
+
+                if pct < 0.03 and hasattr(s, "setExploded"):
+                    s.setExploded(True)
+                    if hasattr(s, "setExplodeDistanceFactor"):
+                        s.setExplodeDistanceFactor(0.06)
+
+        chart = QChart()
+        chart.addSeries(series)
+        chart.setTitle(str(getattr(chart_data, "title", "Generation Chart")))
+        chart.legend().setVisible(False)
+
+        if hasattr(chart, "setMargins"):
+            from PySide6.QtCore import QMargins
+
+            chart.setMargins(QMargins(20, 10, 20, 20))
+
+        self.gen_chart_view.setChart(chart)
+
+        total = getattr(chart_data, "total", None)
+        meta = getattr(chart_data, "meta", {}) or {}
+        meta_text = (
+            ", ".join([f"{k}={v}" for k, v in meta.items()])
+            if isinstance(meta, dict)
+            else str(meta)
+        )
+
+        if total is not None:
+            self.lbl_gen_chart_info.setText(
+                f"Total Pokémon counted: {total}\n{meta_text}"
+            )
+        else:
+            self.lbl_gen_chart_info.setText(meta_text or "—")
+
     # -------------------------------------------------------------------------
     # Language bar
     # -------------------------------------------------------------------------
@@ -498,6 +909,12 @@ class PokedexWindow(QWidget):
 
         # Refresh statistics catalogs (types + ability/egg autocompletes)
         self._init_statistics_catalogs()
+
+        # Re-render charts in the new language (General Statistics)
+        if hasattr(self, "type_chart_view"):
+            self._on_update_type_chart_clicked()
+        if hasattr(self, "gen_chart_view"):
+            self._on_update_gen_chart_clicked()
 
         # Reload current Pokémon if any
         if self.current_identifier:
@@ -940,6 +1357,10 @@ class PokedexWindow(QWidget):
         self._egg_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self._egg_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self.egg_search.setCompleter(self._egg_completer)
+
+        # Generation chart type filter combo (General Statistics)
+        if hasattr(self, "gen_type_filter_combo"):
+            self._fill_gen_type_filter_combo()
 
     def _fetch_catalog_strings(self, api_method_name: str) -> list[str]:
         """
