@@ -5,34 +5,25 @@ main\_qt
    :members:
    :undoc-members:
 
-   
-   
-   
 
-   
-   
+
+
+
+
+
    .. rubric:: Functions
 
    .. autosummary::
       :nosignatures:
-   
-      run
-   
-   
 
-   
-   
+      run
+
+
+
+
+
    .. rubric:: Classes
 
    .. autosummary::
-   
+
       PokedexWindow
-   
-   
-
-   
-   
-   
-
-
-

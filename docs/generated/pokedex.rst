@@ -5,21 +5,21 @@
    :members:
    :undoc-members:
 
-   
-   
-   
 
-   
-   
-   
 
-   
-   
-   
 
-   
-   
-   
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -31,4 +31,3 @@
 
    main_qt
    my_module
-

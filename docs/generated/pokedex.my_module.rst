@@ -5,27 +5,18 @@ my\_module
    :members:
    :undoc-members:
 
-   
-   
-   
 
-   
-   
-   
 
-   
-   
+
+
+
+
+
+
+
+
    .. rubric:: Classes
 
    .. autosummary::
-   
+
       PokedexAPI
-   
-   
-
-   
-   
-   
-
-
-

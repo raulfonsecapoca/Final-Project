@@ -26,6 +26,14 @@ pokemon_species_names_df = pd.read_csv(
     "data/csv/pokemon_species_names.csv"
 )  # for localized names
 
+pokemon_egg_groups_df = pd.read_csv("data/csv/pokemon_egg_groups.csv")
+egg_groups_prose_df = pd.read_csv("data/csv/egg_group_prose.csv")
+
+
+pokemon_abilities_df = pd.read_csv("data/csv/pokemon_abilities.csv")
+ability_names_df = pd.read_csv("data/csv/ability_names.csv")
+ability_flavor_text_df = pd.read_csv("data/csv/ability_flavor_text.csv")
+
 
 class PokedexAPI:
     """
@@ -152,6 +160,44 @@ class PokedexAPI:
         else:
             pokemon_localized_name = p["identifier"].capitalize()
 
+        pokemon_egg_groups = pokemon_egg_groups_df[
+            pokemon_egg_groups_df["species_id"] == pokemon_dexNum
+        ]
+        egg_group_ids = pokemon_egg_groups["egg_group_id"].tolist()
+
+        egg_group_names = []
+        for egg_group_id in egg_group_ids:
+            egg_group_name = egg_groups_prose_df[
+                (egg_groups_prose_df["egg_group_id"] == egg_group_id)
+                & (egg_groups_prose_df["local_language_id"] == language_id)
+            ]
+            if not egg_group_name.empty:
+                egg_group_names.append(egg_group_name["name"].values[0])
+
+        pokemon_abilities = pokemon_abilities_df[
+            pokemon_abilities_df["pokemon_id"] == pokemon_id
+        ]
+        ability_ids = pokemon_abilities["ability_id"].tolist()
+
+        ability_names = []
+        for ability_id in ability_ids:
+            ability_name = ability_names_df[
+                (ability_names_df["ability_id"] == ability_id)
+                & (ability_names_df["local_language_id"] == language_id)
+            ]
+            if not ability_name.empty:
+                ability_names.append(ability_name["name"].values[0])
+            else:
+                ability_name = ability_names_df[
+                    (ability_names_df["ability_id"] == ability_id)
+                    & (ability_names_df["local_language_id"] == 9)
+                ]
+                ability_names.append(ability_name["name"].values[0])
+
+        is_hidden_ability_list = pokemon_abilities[
+            pokemon_abilities["pokemon_id"] == pokemon_id
+        ]["is_hidden"].tolist()
+
         return {
             "name": pokemon_localized_name,
             "dex_number": p["species_id"],
@@ -170,8 +216,9 @@ class PokedexAPI:
             },
             "evolution_line": pokemon_evolution_line_list,
             "forms": pokemon_forms_list,
-            "abilities": ["overgrow", "blaze"],
-            "egg_groups": ["monster", "dragon"],
+            "abilities": ability_names,
+            "is_hidden_ability": is_hidden_ability_list,
+            "egg_groups": egg_group_names,
         }
 
     @staticmethod
@@ -235,22 +282,64 @@ class PokedexAPI:
         return {"versions": versions_list, "flavor_texts": flavor_texts_list}
 
     @staticmethod
-    def get_ability_description(ability: str, language_id: int = 9):
-        # Placeholder implementation
-        ability_descriptions = {
-            "overgrow": {9: "Powers up Grass-type moves when the Pokémon's HP is low."},
-            "blaze": {9: "Powers up Fire-type moves when the Pokémon's HP is low."},
-        }
+    def get_ability_description(
+        ability: str, is_hidden: bool, language_id: int = 9
+    ) -> str:
+        ability_str = str(ability).strip()
+        if not ability_str:
+            raise ValueError("Ability is empty")
 
+        # 1) Find ability_id by ability name (case-insensitive)
         if (
-            ability in ability_descriptions
-            and language_id in ability_descriptions[ability]
+            "name" not in ability_names_df.columns
+            or "ability_id" not in ability_names_df.columns
         ):
-            return ability_descriptions[ability][language_id]
-        else:
             raise ValueError(
-                f"Ability '{ability}' description not found for language ID '{language_id}'"
+                "ability_names_df must have columns: 'name' and 'ability_id'"
             )
+
+        row = ability_names_df[
+            ability_names_df["name"].astype(str).str.casefold()
+            == ability_str.casefold()
+        ]
+
+        # Optional fallback: if you store identifiers too
+        if row.empty and "identifier" in ability_names_df.columns:
+            row = ability_names_df[
+                ability_names_df["identifier"].astype(str).str.casefold()
+                == ability_str.casefold()
+            ]
+
+        if row.empty:
+            raise ValueError(f"Ability '{ability_str}' not found in ability_names_df")
+
+        ability_id = int(row["ability_id"].iloc[0])
+
+        # 2) Get flavor text in requested language, fallback to English (9)
+        flavor = ability_flavor_text_df[
+            (ability_flavor_text_df["ability_id"] == ability_id)
+            & (ability_flavor_text_df["language_id"] == language_id)
+        ]
+
+        if flavor.empty:
+            flavor = ability_flavor_text_df[
+                (ability_flavor_text_df["ability_id"] == ability_id)
+                & (ability_flavor_text_df["language_id"] == 9)
+            ]
+
+        if flavor.empty or "flavor_text" not in flavor.columns:
+            raise ValueError(
+                f"Ability '{ability_str}' description not found for language ID '{language_id}'"
+            )
+
+        # Last available flavor text (latest game version)
+        text = str(flavor["flavor_text"].iloc[-1])
+        text = text.replace("\n", " ").replace("\f", " ").strip()
+
+        if bool(is_hidden):
+            text = f"(Hidden Ability) {text}"
+
+        return text
 
     #### Statistics functions
 

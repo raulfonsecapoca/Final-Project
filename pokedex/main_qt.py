@@ -29,6 +29,7 @@
 
 import os
 import sys
+from itertools import zip_longest
 from pathlib import Path
 
 import pandas as pd
@@ -572,7 +573,7 @@ class PokedexWindow(QWidget):
                 identifier, form=form, language_id=self.current_language_id
             )
             if not isinstance(data, dict):
-                raise ValueError("typed_function.get_pokemon must return a dict")
+                raise ValueError("pokedex.get_pokemon must return a dict")
 
             self.current_data = data
 
@@ -584,7 +585,11 @@ class PokedexWindow(QWidget):
             self._bind_pokedex_flavor(identifier)
 
             # NEW binders
-            self._bind_abilities(data.get("abilities") or [])
+            self._bind_abilities(
+                data.get("abilities") or [],
+                data.get("is_hidden_ability") or [],
+            )
+
             self._bind_egg_groups(data.get("egg_groups") or [])
 
             cries = data.get("cries") or []
@@ -792,20 +797,31 @@ class PokedexWindow(QWidget):
             self.lbl_flavor.setText(self._flavor_texts[idx])
 
     # -------- NEW: Abilities + description --------
-    def _bind_abilities(self, abilities: list[str]):
+
+    def _bind_abilities(self, abilities: list[str], hidden_flags: list[bool]) -> None:
         self.ability_combo.blockSignals(True)
         self.ability_combo.clear()
 
-        abilities = [str(a).strip() for a in (abilities or []) if str(a).strip()]
-        if not abilities:
+        abilities_clean: list[str] = [
+            str(a).strip() for a in (abilities or []) if str(a).strip()
+        ]
+        hidden_clean: list[bool] = [bool(x) for x in (hidden_flags or [])]
+
+        if not abilities_clean:
             self.ability_group.setEnabled(False)
             self.ability_combo.setEnabled(False)
             self.lbl_ability_desc.setText("—")
             self.ability_combo.blockSignals(False)
             return
 
-        for a in abilities:
-            self.ability_combo.addItem(a, userData=a)
+        for name_raw, hidden_raw in zip_longest(
+            abilities_clean, hidden_clean, fillvalue=False
+        ):
+            name: str = str(name_raw)  # <- forces str for type checker
+            is_hidden_bool: bool = bool(hidden_raw)
+
+            display: str = f"{name} (Hidden)" if is_hidden_bool else name
+            self.ability_combo.addItem(display, userData=(name, is_hidden_bool))
 
         self.ability_group.setEnabled(True)
         self.ability_combo.setEnabled(True)
@@ -817,29 +833,48 @@ class PokedexWindow(QWidget):
     def _on_ability_changed(self, _idx: int):
         self._update_ability_description()
 
-    def _update_ability_description(self):
+    def _update_ability_description(self) -> None:
         if self.ability_combo.count() == 0:
             self.lbl_ability_desc.setText("—")
             return
 
-        ability = self.ability_combo.currentData() or self.ability_combo.currentText()
-        if not ability:
+        data = self.ability_combo.currentData()
+
+        # Expected: (ability_name, is_hidden_bool)
+        if isinstance(data, tuple) and len(data) == 2:
+            ability_name, is_hidden = data
+            ability_str = str(ability_name).strip()
+            is_hidden_bool = bool(is_hidden)
+        else:
+            # Fallback if old items exist
+            ability_str = str(self.ability_combo.currentText()).strip()
+            is_hidden_bool = False
+
+        if not ability_str:
             self.lbl_ability_desc.setText("—")
             return
 
         if not hasattr(api, "get_ability_description"):
-            self.lbl_ability_desc.setText(
-                "TODO: implement api.get_ability_description(...)"
-            )
+            self.lbl_ability_desc.setText("Ability description API not available.")
             return
 
         try:
+            # Your API must accept (ability: str, is_hidden: bool, language_id: int)
             desc = api.get_ability_description(
-                str(ability), language_id=self.current_language_id
+                ability_str,
+                is_hidden_bool,
+                language_id=self.current_language_id,
             )
-            self.lbl_ability_desc.setText(str(desc) if desc else "—")
-        except Exception:
-            self.lbl_ability_desc.setText("—")
+
+            if desc is None:
+                self.lbl_ability_desc.setText("—")
+                return
+
+            desc_str = str(desc).replace("\n", " ").replace("\f", " ").strip()
+            self.lbl_ability_desc.setText(desc_str if desc_str else "—")
+
+        except Exception as e:
+            self.lbl_ability_desc.setText(f"Error: {e}")
 
     # -------- NEW: Egg groups --------
     def _bind_egg_groups(self, egg_groups: list[str]):
