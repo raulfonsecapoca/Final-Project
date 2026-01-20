@@ -70,6 +70,10 @@ pokemon_species_names_df = pd.read_csv(
     "data/csv/pokemon_species_names.csv"
 )  # localized names
 
+pokemon_egg_groups_df = pd.read_csv("data/csv/pokemon_egg_groups.csv")
+egg_groups_prose_df = pd.read_csv("data/csv/egg_group_prose.csv")
+egg_groups_df = pd.read_csv("data/csv/egg_groups.csv")
+
 BASE_DIR = Path(__file__).resolve().parent.parent  # Final-Project/
 TYPE_ICON_DIR = (
     BASE_DIR
@@ -462,6 +466,7 @@ class PokedexWindow(QWidget):
         self.egg_stats_group = QGroupBox("Egg Group Distribution")
         self.egg_search = QLineEdit()
         self.egg_search.setPlaceholderText("Search egg group (type to autocomplete)")
+        self._init_egg_autocomplete()
 
         self.egg_type_filter_combo = QComboBox()
         self.egg_type_filter_combo.addItem("All types", userData=None)
@@ -942,13 +947,14 @@ class PokedexWindow(QWidget):
         self.input_name.textEdited.connect(self._on_pokemon_search_text_edited)
 
     def _get_all_pokemon_names(self) -> list[str]:
-        lang = self.current_language_id
-        df = pokemon_species_names_df[
-            pokemon_species_names_df["local_language_id"] == lang
-        ]
-        if df.empty:
-            return pokemon_species_df["identifier"].str.capitalize().tolist()
-        return df["name"].tolist()
+        return self._get_all_names()
+        # lang = self.current_language_id
+        # df = pokemon_species_names_df[
+        #     pokemon_species_names_df["local_language_id"] == lang
+        #]
+        #if df.empty:
+        #    return pokemon_species_df["identifier"].str.capitalize().tolist()
+        #return df["name"].tolist()
 
     def _on_pokemon_search_text_edited(self, text: str):
         pattern = text.strip().casefold()
@@ -961,6 +967,15 @@ class PokedexWindow(QWidget):
             if name.casefold().startswith(pattern)
         ]
         self._pokemon_completer_model.setStringList(matches[:10])
+
+    def _get_all_names(self, names_df=pokemon_species_names_df, base_df=pokemon_species_df,
+                       lang_col='local_language_id', name_col='name', 
+                       base_identifier_col= 'identifier',) -> list[str]:
+        lang = self.current_language_id
+        df = names_df[names_df[lang_col]==lang]
+        if df.empty:
+            return base_df[base_identifier_col].str.replace("-","").str.capitalize().tolist()
+        return df[name_col].tolist()    
 
     # -------------------------------------------------------------------------
     # Data loading (Pokédex tab)
@@ -1361,6 +1376,43 @@ class PokedexWindow(QWidget):
         # Generation chart type filter combo (General Statistics)
         if hasattr(self, "gen_type_filter_combo"):
             self._fill_gen_type_filter_combo()
+
+    # -------------------------------------------------------------------------
+    # Top autocomplete (Eggs groups)
+    # -------------------------------------------------------------------------
+
+    def _init_egg_autocomplete(self):
+        all_names = self._get_all_egg_group_names()
+        self._all_egg_names = sorted(set(all_names), key=str.casefold)
+
+        self._egg_completer_model = QStringListModel(self._all_egg_names, self)
+        self._egg_completer = QCompleter(self._egg_completer_model, self)
+
+        self._egg_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._egg_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
+        self._egg_completer.setFilterMode(Qt.MatchFlag.MatchStartsWith)
+        self.egg_search.setCompleter(self._egg_completer)
+
+        
+    def _on_egg_search_text_edited(self, text: str):
+        pattern = text.strip().casefold()
+        if not pattern:
+            self._egg_completer_model.setStringList([])
+            return
+        matches = [
+            name
+            for name in self._all_egg_names
+            if name.casefold().startswith(pattern)
+        ]
+        self._egg_completer_model.setStringList(matches[:3])
+
+    def _get_all_egg_group_names(self) -> list[str]:
+        return self._get_all_names(names_df=egg_groups_prose_df, base_df=egg_groups_df,
+                                   lang_col="local_language_id", name_col="name",
+                                   base_identifier_col="identifier",
+                                   )
+    # -------------------------------------------------------------------------
 
     def _fetch_catalog_strings(self, api_method_name: str) -> list[str]:
         """
