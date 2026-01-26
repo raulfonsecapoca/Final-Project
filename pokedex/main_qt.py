@@ -1,9 +1,9 @@
 # main_qt.py
 # """
 # Pokédex app UI using PySide6.
-
-# This file expects pokedex.my_module.typed_function to expose:
-
+#
+# This file expects pokedex.my_module.PokedexAPI to expose:
+#
 # - get_pokemon(identifier: str, form: str | None = None, language_id: int = 9) -> dict
 #   - returning keys:
 #     - name, dex_number, image, cries (list[str]), types (list[int|str]),
@@ -12,19 +12,22 @@
 #   - NEW keys recommended:
 #     - abilities (list[str]|optional)
 #     - egg_groups (list[str]|optional)
-
+#
 # - (optional) get_available_forms(identifier) -> list[str]
 # - (optional) get_pokedex_flavor(identifier: str, language_id: int = 9)
 #   returning {"versions": list, "flavor_texts": list}
-
+#
 # NEW (stubs you implement for the UI to fully work):
-# - get_ability_description(ability: str, language_id: int = 9) -> str
+# - get_ability_description(ability: str, is_hidden: bool, language_id: int = 9) -> str
 # - get_all_types(language_id: int = 9) -> list[str] or list[tuple[str,str]]
 # - get_all_abilities(language_id: int = 9) -> list[str] or list[tuple[str,str]]
-# - get_all_egg_groups(language_id: int = 9) -> list[str] or list[tuple[str,str]]
 # - get_stat_rank(identifier: str, stat_key: str, language_id: int = 9, type_filter: str | None = None) -> dict
 # - count_pokemon_with_ability(ability: str, type_filter: str | None = None) -> int
 # - count_pokemon_in_egg_group(egg_group: str, type_filter: str | None = None) -> int
+# - get_ability_type_chart(ability: str, language_id: int = 9) -> ChartData
+# - get_ability_gen_chart(ability: str, language_id: int = 9) -> ChartData
+# - get_item(item: str, language_id: int = 9) -> dict
+# - get_all_items(language_id: int = 9) -> list[str] or list[tuple[str,str]]
 # """
 
 import math
@@ -36,7 +39,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 from PySide6.QtCharts import QChart, QChartView, QPieSeries, QPieSlice
-from PySide6.QtCore import QSize, QStringListModel, Qt, QUrl
+from PySide6.QtCore import QMargins, QSize, QStringListModel, Qt, QUrl
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -69,10 +72,6 @@ pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
 pokemon_species_names_df = pd.read_csv(
     "data/csv/pokemon_species_names.csv"
 )  # localized names
-
-pokemon_egg_groups_df = pd.read_csv("data/csv/pokemon_egg_groups.csv")
-egg_groups_prose_df = pd.read_csv("data/csv/egg_group_prose.csv")
-egg_groups_df = pd.read_csv("data/csv/egg_groups.csv")
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # Final-Project/
 TYPE_ICON_DIR = (
@@ -197,6 +196,7 @@ class PokedexWindow(QWidget):
         self.input_name.setPlaceholderText(
             "Enter Pokémon name or number (e.g., pikachu or 25)"
         )
+
         self.btn_load = QPushButton("Load")
 
         self.form_combo = QComboBox()
@@ -250,7 +250,7 @@ class PokedexWindow(QWidget):
         # Autocomplete (top bar)
         self._init_pokemon_autocomplete()
 
-        # Fill statistics catalogs (types + ability/egg autocompletes)
+        # Fill statistics catalogs (types + ability autocomplete + items autocomplete)
         self._init_statistics_catalogs()
 
     # -------------------------------------------------------------------------
@@ -273,7 +273,7 @@ class PokedexWindow(QWidget):
         self.types_row = QHBoxLayout()
         self.types_row.addStretch()
 
-        # NEW: Abilities (combo + description)
+        # Abilities (combo + description) - Pokémon tab
         self.ability_group = QGroupBox("Abilities")
         self.ability_group.setEnabled(False)
 
@@ -294,7 +294,7 @@ class PokedexWindow(QWidget):
         ag.addWidget(self.lbl_ability_desc)
         self.ability_group.setLayout(ag)
 
-        # NEW: Egg groups
+        # Egg groups (Pokémon tab)
         self.egg_group_box = QGroupBox("Egg Groups")
         self.egg_group_box.setEnabled(False)
 
@@ -397,11 +397,13 @@ class PokedexWindow(QWidget):
         self.stats_tab_pokemon = QWidget()
         self.stats_tab_egg = QWidget()
         self.stats_tab_abilities = QWidget()
+        self.stats_tab_items = QWidget()
 
         self.stats_tabs.addTab(self.stats_tab_general, "General Statistics")
         self.stats_tabs.addTab(self.stats_tab_pokemon, "Pokemon")
         self.stats_tabs.addTab(self.stats_tab_egg, "Egg Groups")
         self.stats_tabs.addTab(self.stats_tab_abilities, "Abilities")
+        self.stats_tabs.addTab(self.stats_tab_items, "Items")
 
         # ---------------- Subtab: General Statistics ----------------
         self._build_general_statistics_subtab()
@@ -419,7 +421,6 @@ class PokedexWindow(QWidget):
         self.rank_type_filter_combo = QComboBox()
         self.rank_type_filter_combo.addItem("All types", userData=None)
 
-        self.btn_compute_rank = QPushButton("Compute Rank")
         self.lbl_rank_result = QLabel("—")
         self.lbl_rank_result.setWordWrap(True)
 
@@ -429,76 +430,25 @@ class PokedexWindow(QWidget):
         rg.addWidget(self.rank_stat_combo, 1, 1)
         rg.addWidget(QLabel("Type filter:"), 2, 0)
         rg.addWidget(self.rank_type_filter_combo, 2, 1)
-        rg.addWidget(self.btn_compute_rank, 3, 0, 1, 2)
-        rg.addWidget(self.lbl_rank_result, 4, 0, 1, 2)
+        rg.addWidget(self.lbl_rank_result, 3, 0, 1, 2)
         self.rank_group.setLayout(rg)
 
         pokemon_layout = QVBoxLayout(self.stats_tab_pokemon)
         pokemon_layout.addWidget(self.rank_group)
         pokemon_layout.addStretch()
 
-        # ---------------- Subtab: Abilities (search bar) ----------------
-        self.ability_stats_group = QGroupBox("Ability Distribution")
-        self.ability_search = QLineEdit()
-        self.ability_search.setPlaceholderText("Search ability (type to autocomplete)")
+        # ---------------- Subtab: Egg Groups (CHART ONLY) ----------------
+        self._build_egg_group_chart_subtab()
 
-        self.ability_type_filter_combo = QComboBox()
-        self.ability_type_filter_combo.addItem("All types", userData=None)
+        # ---------------- Subtab: Abilities (description + 2 charts) ----------------
+        self._build_abilities_subtab()
 
-        self.btn_count_ability = QPushButton("Count Pokémon With Ability")
-        self.lbl_ability_count = QLabel("—")
-        self.lbl_ability_count.setWordWrap(True)
-
-        ag = QGridLayout()
-        ag.addWidget(QLabel("Ability:"), 0, 0)
-        ag.addWidget(self.ability_search, 0, 1)
-        ag.addWidget(QLabel("Type filter:"), 1, 0)
-        ag.addWidget(self.ability_type_filter_combo, 1, 1)
-        ag.addWidget(self.btn_count_ability, 2, 0, 1, 2)
-        ag.addWidget(self.lbl_ability_count, 3, 0, 1, 2)
-        self.ability_stats_group.setLayout(ag)
-
-        abilities_layout = QVBoxLayout(self.stats_tab_abilities)
-        abilities_layout.addWidget(self.ability_stats_group)
-        abilities_layout.addStretch()
-
-        # ---------------- Subtab: Egg Groups (search bar) ----------------
-        self.egg_stats_group = QGroupBox("Egg Group Distribution")
-        self.egg_search = QLineEdit()
-        self.egg_search.setPlaceholderText("Search egg group (type to autocomplete)")
-        self._init_egg_autocomplete()
-
-        self.egg_type_filter_combo = QComboBox()
-        self.egg_type_filter_combo.addItem("All types", userData=None)
-
-        self.btn_count_egg = QPushButton("Count Pokémon In Egg Group")
-        self.lbl_egg_count = QLabel("—")
-        self.lbl_egg_count.setWordWrap(True)
-
-        eg = QGridLayout()
-        eg.addWidget(QLabel("Egg group:"), 0, 0)
-        eg.addWidget(self.egg_search, 0, 1)
-        eg.addWidget(QLabel("Type filter:"), 1, 0)
-        eg.addWidget(self.egg_type_filter_combo, 1, 1)
-        eg.addWidget(self.btn_count_egg, 2, 0, 1, 2)
-        eg.addWidget(self.lbl_egg_count, 3, 0, 1, 2)
-        self.egg_stats_group.setLayout(eg)
-
-        egg_layout = QVBoxLayout(self.stats_tab_egg)
-        egg_layout.addWidget(self.egg_stats_group)
-        egg_layout.addStretch()
+        # ---------------- Subtab: Items (search + details) ----------------
+        self._build_items_subtab()
 
         # Assemble Statistics tab
         tab_layout = QVBoxLayout(self.tab_stats)
         tab_layout.addWidget(self.stats_tabs, 1)
-
-        # Signals
-        self.btn_compute_rank.clicked.connect(self._on_compute_rank_clicked)
-        self.btn_count_ability.clicked.connect(self._on_count_ability_clicked)
-        self.btn_count_egg.clicked.connect(self._on_count_egg_clicked)
-
-        self.ability_search.returnPressed.connect(self._on_count_ability_clicked)
-        self.egg_search.returnPressed.connect(self._on_count_egg_clicked)
 
     def _build_general_statistics_subtab(self) -> None:
         # ---------------- Type Chart (filters above) ----------------
@@ -522,12 +472,9 @@ class PokedexWindow(QWidget):
 
         gens_box.setLayout(gens_layout)
 
-        self.btn_update_type_chart = QPushButton("Update Type Chart")
-
         type_filters_layout = QVBoxLayout()
         type_filters_layout.addWidget(self.chk_forms_enable)
         type_filters_layout.addWidget(gens_box)
-        type_filters_layout.addWidget(self.btn_update_type_chart)
 
         # Type chart view
         self.type_chart_view = QChartView()
@@ -546,12 +493,10 @@ class PokedexWindow(QWidget):
         gen_box = QGroupBox("Generation Chart")
 
         self.gen_type_filter_combo = QComboBox()
-        self.btn_update_gen_chart = QPushButton("Update Gen Chart")
 
         gen_filter_row = QHBoxLayout()
         gen_filter_row.addWidget(QLabel("Type filter:"), 0)
         gen_filter_row.addWidget(self.gen_type_filter_combo, 1)
-        gen_filter_row.addWidget(self.btn_update_gen_chart, 0)
 
         self.gen_chart_view = QChartView()
         self.gen_chart_view.setRenderHint(self.gen_chart_view.renderHints())
@@ -573,13 +518,11 @@ class PokedexWindow(QWidget):
         layout = QVBoxLayout(self.stats_tab_general)
         layout.addLayout(main_row, 1)
 
-        # ---------------- Signals ----------------
-        self.btn_update_type_chart.clicked.connect(self._on_update_type_chart_clicked)
+        # ---------------- Signals (auto-update, no buttons) ----------------
         self.chk_forms_enable.toggled.connect(self._on_update_type_chart_clicked)
         for cb in self.gen_checkboxes:
             cb.toggled.connect(self._on_update_type_chart_clicked)
 
-        self.btn_update_gen_chart.clicked.connect(self._on_update_gen_chart_clicked)
         self.gen_type_filter_combo.currentIndexChanged.connect(
             self._on_update_gen_chart_clicked
         )
@@ -588,7 +531,170 @@ class PokedexWindow(QWidget):
         self._on_update_type_chart_clicked()
         self._on_update_gen_chart_clicked()
 
-    # ---------- General statistics handlers ----------
+    def _build_egg_group_chart_subtab(self) -> None:
+        """Egg Groups subtab: filters + uses api.get_egg_chart."""
+        egg_box = QGroupBox("Egg Group Chart")
+
+        egg_gens_box = QGroupBox("Generations")
+        egg_gens_layout = QGridLayout()
+
+        self.egg_gen_checkboxes: list[QCheckBox] = []
+        for i in range(1, 10):  # 1..9
+            cb = QCheckBox(f"Gen {i}")
+            cb.setChecked(True)
+            self.egg_gen_checkboxes.append(cb)
+            r = (i - 1) // 3
+            c = (i - 1) % 3
+            egg_gens_layout.addWidget(cb, r, c)
+
+        egg_gens_box.setLayout(egg_gens_layout)
+
+        self.egg_type_filter_combo = QComboBox()
+        egg_filter_row = QHBoxLayout()
+        egg_filter_row.addWidget(QLabel("Type filter:"), 0)
+        egg_filter_row.addWidget(self.egg_type_filter_combo, 1)
+
+        self.egg_chart_view = QChartView()
+        self.egg_chart_view.setRenderHint(self.egg_chart_view.renderHints())
+
+        self.lbl_egg_chart_info = QLabel("—")
+        self.lbl_egg_chart_info.setWordWrap(True)
+
+        filters_layout = QVBoxLayout()
+        filters_layout.addWidget(egg_gens_box)
+        filters_layout.addLayout(egg_filter_row)
+
+        egg_layout = QVBoxLayout()
+        egg_layout.addLayout(filters_layout)
+        egg_layout.addWidget(self.egg_chart_view, 1)
+        egg_layout.addWidget(self.lbl_egg_chart_info)
+        egg_box.setLayout(egg_layout)
+
+        layout = QVBoxLayout(self.stats_tab_egg)
+        layout.addWidget(egg_box, 1)
+
+        # Signals: auto-update (no button)
+        for cb in self.egg_gen_checkboxes:
+            cb.toggled.connect(self._on_update_egg_chart_clicked)
+        self.egg_type_filter_combo.currentIndexChanged.connect(
+            self._on_update_egg_chart_clicked
+        )
+
+        self._on_update_egg_chart_clicked()
+
+    def _build_abilities_subtab(self) -> None:
+        """Abilities subtab: show description + 2 charts side-by-side."""
+        root = QVBoxLayout(self.stats_tab_abilities)
+
+        box = QGroupBox("Ability Details")
+        layout = QVBoxLayout(box)
+
+        # Search row
+        self.ability_search = QLineEdit()
+        self.ability_search.setPlaceholderText("Search ability (type to autocomplete)")
+        layout.addWidget(QLabel("Ability:"))
+        layout.addWidget(self.ability_search)
+
+        # Description
+        self.lbl_ability_desc_stats = QLabel("—")
+        self.lbl_ability_desc_stats.setWordWrap(True)
+        self.lbl_ability_desc_stats.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.lbl_ability_desc_stats.setMinimumHeight(80)
+        layout.addWidget(QLabel("Description:"))
+        layout.addWidget(self.lbl_ability_desc_stats)
+
+        # Charts row (side-by-side)
+        charts_row = QHBoxLayout()
+
+        left_box = QGroupBox("Type Chart")
+        left_layout = QVBoxLayout(left_box)
+        self.ability_type_chart_view = QChartView()
+        self.ability_type_chart_view.setRenderHint(
+            self.ability_type_chart_view.renderHints()
+        )
+        self.lbl_ability_type_chart_info = QLabel("—")
+        self.lbl_ability_type_chart_info.setWordWrap(True)
+        left_layout.addWidget(self.ability_type_chart_view, 1)
+        left_layout.addWidget(self.lbl_ability_type_chart_info)
+
+        right_box = QGroupBox("Generation Chart")
+        right_layout = QVBoxLayout(right_box)
+        self.ability_gen_chart_view = QChartView()
+        self.ability_gen_chart_view.setRenderHint(
+            self.ability_gen_chart_view.renderHints()
+        )
+        self.lbl_ability_gen_chart_info = QLabel("—")
+        self.lbl_ability_gen_chart_info.setWordWrap(True)
+        right_layout.addWidget(self.ability_gen_chart_view, 1)
+        right_layout.addWidget(self.lbl_ability_gen_chart_info)
+
+        charts_row.addWidget(left_box, 1)
+        charts_row.addWidget(right_box, 1)
+
+        layout.addLayout(charts_row, 1)
+
+        root.addWidget(box, 1)
+
+        # Signals: update on Enter; completer activation hooked in _init_statistics_catalogs
+        self.ability_search.returnPressed.connect(self._on_update_ability_details)
+
+        # Initial blank
+        self._clear_ability_details()
+
+    def _build_items_subtab(self) -> None:
+        """Items subtab: search (autocomplete) + show name, flavor text, and image."""
+        root = QVBoxLayout(self.stats_tab_items)
+
+        box = QGroupBox("Item Details")
+        layout = QVBoxLayout(box)
+
+        # Search
+        self.item_search = QLineEdit()
+        self.item_search.setPlaceholderText("Search item (type to autocomplete)")
+        layout.addWidget(QLabel("Item:"))
+        layout.addWidget(self.item_search)
+
+        # Content row: image + text
+        content_row = QHBoxLayout()
+
+        self.lbl_item_image = QLabel()
+        self.lbl_item_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_item_image.setFrameShape(QFrame.Shape.Panel)
+        self.lbl_item_image.setFrameShadow(QFrame.Shadow.Sunken)
+        self.lbl_item_image.setMinimumSize(160, 160)
+
+        text_col = QVBoxLayout()
+
+        self.lbl_item_name = QLabel("—")
+        self.lbl_item_name.setWordWrap(True)
+
+        self.lbl_item_desc = QLabel("—")
+        self.lbl_item_desc.setWordWrap(True)
+        self.lbl_item_desc.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.lbl_item_desc.setMinimumHeight(160)
+
+        text_col.addWidget(QLabel("Name:"))
+        text_col.addWidget(self.lbl_item_name)
+        text_col.addSpacing(8)
+        text_col.addWidget(QLabel("Description:"))
+        text_col.addWidget(self.lbl_item_desc, 1)
+
+        content_row.addWidget(self.lbl_item_image, 0)
+        content_row.addLayout(text_col, 1)
+
+        layout.addLayout(content_row, 1)
+        root.addWidget(box, 1)
+
+        # Signals
+        self.item_search.returnPressed.connect(self._on_update_item_details)
+
+        # Initial blank
+        self._clear_item_details()
+
+    # -------------------------------------------------------------------------
+    # Charts handlers
+    # -------------------------------------------------------------------------
+
     def _on_update_type_chart_clicked(self) -> None:
         if not hasattr(api, "get_type_chart"):
             self.lbl_type_chart_info.setText("TODO: implement api.get_type_chart(...)")
@@ -604,57 +710,15 @@ class PokedexWindow(QWidget):
                 forms_enable=forms_enable,
                 generations_enable=generations_enable,
             )
-            self._render_type_pie_chart(chart_data)
+            self._render_pie_chart(
+                chart_view=self.type_chart_view,
+                chart_data=chart_data,
+                title_fallback="Type Chart",
+                info_label=self.lbl_type_chart_info,
+            )
         except Exception as e:
             self.lbl_type_chart_info.setText(f"Error: {e}")
             self.type_chart_view.setChart(QChart())
-
-    def _fill_gen_type_filter_combo(self) -> None:
-        """Fill the generation chart type filter with type identifiers as userData."""
-        if not hasattr(self, "gen_type_filter_combo"):
-            return
-
-        combo = self.gen_type_filter_combo
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItem("All types", userData=None)
-
-        # Try to use API catalog (preferred) but ensure userData stays an identifier.
-        if hasattr(api, "get_all_types"):
-            try:
-                items = api.get_all_types(language_id=self.current_language_id) or []
-                for it in items:
-                    # Accept ("id_or_identifier", "Localized Name") or plain strings.
-                    if isinstance(it, (list | tuple)) and len(it) >= 2:
-                        raw_key = str(it[0]).strip()
-                        label = str(it[1]).strip()
-                    else:
-                        raw_key = str(it).strip()
-                        label = raw_key
-
-                    identifier: str | None = None
-
-                    # If key is numeric, map 1..18 to canonical identifiers.
-                    if raw_key.isdigit():
-                        tid = int(raw_key)
-                        if 1 <= tid <= len(TYPE_IDENTIFIERS):
-                            identifier = TYPE_IDENTIFIERS[tid - 1]
-                    else:
-                        # Otherwise assume the API gives an identifier directly.
-                        identifier = raw_key.lower()
-
-                    if identifier:
-                        combo.addItem(label, userData=identifier)
-            except Exception:
-                # Fall back to fixed list below.
-                pass
-
-        # Fallback if nothing was added (or API missing/failed).
-        if combo.count() <= 1:
-            for ident in TYPE_IDENTIFIERS:
-                combo.addItem(ident.capitalize(), userData=ident)
-
-        combo.blockSignals(False)
 
     def _on_update_gen_chart_clicked(self) -> None:
         if not hasattr(api, "get_gen_chart"):
@@ -662,30 +726,202 @@ class PokedexWindow(QWidget):
             self.gen_chart_view.setChart(QChart())
             return
 
-        type_filter = None
-        if hasattr(self, "gen_type_filter_combo"):
-            type_filter = self.gen_type_filter_combo.currentData()
+        type_filter = (
+            self.gen_type_filter_combo.currentData()
+            if hasattr(self, "gen_type_filter_combo")
+            else None
+        )
 
         try:
             chart_data = api.get_gen_chart(
                 language_id=self.current_language_id,
                 type_filter=type_filter,
             )
-            self._render_gen_pie_chart(chart_data)
+            self._render_pie_chart(
+                chart_view=self.gen_chart_view,
+                chart_data=chart_data,
+                title_fallback="Generation Chart",
+                info_label=self.lbl_gen_chart_info,
+            )
         except Exception as e:
             self.lbl_gen_chart_info.setText(f"Error: {e}")
             self.gen_chart_view.setChart(QChart())
 
-    def _render_type_pie_chart(self, chart_data) -> None:
-        """
-        chart_data is expected to have:
-        - title: str
-        - labels: list[Any]
-        - values: list[int|float]
-        - total: int|float
-        - meta: dict (optional)
-        """
+    def _on_update_egg_chart_clicked(self) -> None:
+        if not hasattr(api, "get_egg_chart"):
+            self.lbl_egg_chart_info.setText("TODO: implement api.get_egg_chart(...)")
+            self.egg_chart_view.setChart(QChart())
+            return
 
+        generations_enable = [cb.isChecked() for cb in self.egg_gen_checkboxes]
+        type_filter = self.egg_type_filter_combo.currentData()
+
+        try:
+            chart_data = api.get_egg_chart(
+                language_id=self.current_language_id,
+                type_filter=type_filter,
+                generations_enable=generations_enable,
+            )
+            self._render_pie_chart(
+                chart_view=self.egg_chart_view,
+                chart_data=chart_data,
+                title_fallback="Egg Group Chart",
+                info_label=self.lbl_egg_chart_info,
+            )
+        except Exception as e:
+            self.lbl_egg_chart_info.setText(f"Error: {e}")
+            self.egg_chart_view.setChart(QChart())
+
+    # -------------------------------------------------------------------------
+    # Abilities subtab handlers
+    # -------------------------------------------------------------------------
+
+    def _clear_ability_details(self) -> None:
+        if hasattr(self, "lbl_ability_desc_stats"):
+            self.lbl_ability_desc_stats.setText("—")
+
+        if hasattr(self, "ability_type_chart_view"):
+            self.ability_type_chart_view.setChart(QChart())
+        if hasattr(self, "ability_gen_chart_view"):
+            self.ability_gen_chart_view.setChart(QChart())
+
+        if hasattr(self, "lbl_ability_type_chart_info"):
+            self.lbl_ability_type_chart_info.setText("—")
+        if hasattr(self, "lbl_ability_gen_chart_info"):
+            self.lbl_ability_gen_chart_info.setText("—")
+
+    def _on_update_ability_details(self) -> None:
+        ability_text = (
+            self.ability_search.text().strip()
+            if hasattr(self, "ability_search")
+            else ""
+        )
+        if not ability_text:
+            self._clear_ability_details()
+            return
+
+        # Description
+        if not hasattr(api, "get_ability_description"):
+            self.lbl_ability_desc_stats.setText(
+                "Ability description API not available."
+            )
+        else:
+            try:
+                desc = api.get_ability_description(
+                    ability_text,
+                    False,
+                    language_id=self.current_language_id,
+                )
+                desc_str = str(desc).replace("\n", " ").replace("\f", " ").strip()
+                self.lbl_ability_desc_stats.setText(desc_str if desc_str else "—")
+            except Exception as e:
+                self.lbl_ability_desc_stats.setText(f"Error: {e}")
+
+        # Left: type chart
+        if hasattr(api, "get_ability_type_chart"):
+            try:
+                cd = api.get_ability_type_chart(
+                    ability_text, language_id=self.current_language_id
+                )
+                self._render_pie_chart(
+                    chart_view=self.ability_type_chart_view,
+                    chart_data=cd,
+                    title_fallback="Type Chart - Ability",
+                    info_label=self.lbl_ability_type_chart_info,
+                )
+            except Exception as e:
+                self.lbl_ability_type_chart_info.setText(f"Error: {e}")
+                self.ability_type_chart_view.setChart(QChart())
+        else:
+            self.lbl_ability_type_chart_info.setText(
+                "TODO: implement api.get_ability_type_chart(...)"
+            )
+            self.ability_type_chart_view.setChart(QChart())
+
+        # Right: gen chart
+        if hasattr(api, "get_ability_gen_chart"):
+            try:
+                cd = api.get_ability_gen_chart(
+                    ability_text, language_id=self.current_language_id
+                )
+                self._render_pie_chart(
+                    chart_view=self.ability_gen_chart_view,
+                    chart_data=cd,
+                    title_fallback="Generation Chart - Ability",
+                    info_label=self.lbl_ability_gen_chart_info,
+                )
+            except Exception as e:
+                self.lbl_ability_gen_chart_info.setText(f"Error: {e}")
+                self.ability_gen_chart_view.setChart(QChart())
+        else:
+            self.lbl_ability_gen_chart_info.setText(
+                "TODO: implement api.get_ability_gen_chart(...)"
+            )
+            self.ability_gen_chart_view.setChart(QChart())
+
+    # -------------------------------------------------------------------------
+    # Items subtab handlers
+    # -------------------------------------------------------------------------
+
+    def _clear_item_details(self) -> None:
+        if hasattr(self, "lbl_item_name"):
+            self.lbl_item_name.setText("—")
+        if hasattr(self, "lbl_item_desc"):
+            self.lbl_item_desc.setText("—")
+        if hasattr(self, "lbl_item_image"):
+            self.lbl_item_image.setPixmap(QPixmap())
+            self.lbl_item_image.setText("—")
+
+    def _on_update_item_details(self) -> None:
+        item_text = (
+            self.item_search.text().strip() if hasattr(self, "item_search") else ""
+        )
+        if not item_text:
+            self._clear_item_details()
+            return
+
+        if not hasattr(api, "get_item"):
+            self._clear_item_details()
+            if hasattr(self, "lbl_item_desc"):
+                self.lbl_item_desc.setText("Item flavor text API not available.")
+            return
+
+        try:
+            res = api.get_item(item_text, language_id=self.current_language_id)
+            name = str(res.get("name", "—"))
+            desc = (
+                str(res.get("item_flavor_text", "—"))
+                .replace("\n", " ")
+                .replace("\f", " ")
+                .strip()
+            )
+            image = res.get("image")
+
+            self.lbl_item_name.setText(f"<b>{name}</b>")
+            self.lbl_item_desc.setText(desc if desc else "—")
+
+            pm = _load_pixmap(str(image), QSize(160, 160)) if image else QPixmap()
+            if pm.isNull():
+                self.lbl_item_image.setPixmap(QPixmap())
+                self.lbl_item_image.setText("No image")
+            else:
+                self.lbl_item_image.setPixmap(pm)
+                self.lbl_item_image.setText("")
+        except Exception as e:
+            self._clear_item_details()
+            self.lbl_item_desc.setText(f"Error: {e}")
+
+    # -------------------------------------------------------------------------
+    # Pie renderer (includes readability tweaks for few slices)
+    # -------------------------------------------------------------------------
+
+    def _render_pie_chart(
+        self,
+        chart_view: QChartView,
+        chart_data,
+        title_fallback: str,
+        info_label: QLabel,
+    ) -> None:
         series = QPieSeries()
 
         labels = getattr(chart_data, "labels", []) or []
@@ -701,76 +937,69 @@ class PokedexWindow(QWidget):
 
             slice_ = series.append(str(label), v)
 
-            # label "type count" outside with arrow
-            count = int(v) if v.is_integer() else v
+            count = int(v) if float(v).is_integer() else v
             slice_.setLabel(f"{label} {count}")
             slice_.setLabelVisible(True)
-            slice_.setLabelPosition(QPieSlice.LabelPosition.LabelOutside)
 
-            # default arm (we'll adjust later for small slices)
+            slice_.setLabelPosition(QPieSlice.LabelPosition.LabelOutside)
             slice_.setLabelArmLengthFactor(0.15)
 
-        # 1) Make the pie slightly smaller to leave room for labels
-        # (if your QtCharts version doesn't have this, you can comment it out)
-        if hasattr(series, "setPieSize"):
-            series.setPieSize(0.65)
+        slices = series.slices()
+        n_slices = len(slices)
 
-        # 2) Heuristic to reduce overlap:
-        #    - group by side (right/left)
-        #    - sort top to bottom
-        #    - for small slices, increase the "arm" in steps
-        #    - optional: explode VERY small slices
-        right = []
-        left = []
-
-        for s in series.slices():
-            # Some Pylance stubs don't show these methods, but they exist at runtime.
-            if not (hasattr(s, "startAngle") and hasattr(s, "angleSpan")):
-                continue
-
-            mid = float(s.startAngle()) + float(s.angleSpan()) / 2.0
-            rad = math.radians(mid)
-
-            # side based on cosine
-            side_is_right = math.cos(rad) >= 0
-            y = math.sin(rad)  # "height" ordering
-
-            (right if side_is_right else left).append((y, s))
-
-        for side_list in (right, left):
-            side_list.sort(key=lambda t: t[0], reverse=True)  # top -> bottom
-
-            k = 0
-            for _, s in side_list:
-                pct = float(s.percentage()) if hasattr(s, "percentage") else 0.0
-
-                # adjust only for small slices (tune this)
-                if pct < 0.06:
-                    s.setLabelArmLengthFactor(0.15 + 0.03 * k)
-                    k += 1
+        if n_slices <= 6:
+            for s in slices:
+                s.setExploded(False)
+                s.setLabelArmLengthFactor(0.0)
+                if hasattr(QPieSlice.LabelPosition, "LabelInsideNormal"):
+                    s.setLabelPosition(QPieSlice.LabelPosition.LabelInsideNormal)
                 else:
-                    s.setLabelArmLengthFactor(0.15)
+                    s.setLabelPosition(QPieSlice.LabelPosition.LabelOutside)
 
-                # optional: explode VERY small slices to separate even more
-                if pct < 0.03 and hasattr(s, "setExploded"):
-                    s.setExploded(True)
-                    if hasattr(s, "setExplodeDistanceFactor"):
-                        s.setExplodeDistanceFactor(0.06)
+            if hasattr(series, "setPieSize"):
+                series.setPieSize(0.85)
+            show_legend = False
+        else:
+            if hasattr(series, "setPieSize"):
+                series.setPieSize(0.65)
+
+            right = []
+            left = []
+            for s in slices:
+                if not (hasattr(s, "startAngle") and hasattr(s, "angleSpan")):
+                    continue
+
+                mid = float(s.startAngle()) + float(s.angleSpan()) / 2.0
+                rad = math.radians(mid)
+                side_is_right = math.cos(rad) >= 0
+                y = math.sin(rad)
+                (right if side_is_right else left).append((y, s))
+
+            for side_list in (right, left):
+                side_list.sort(key=lambda t: t[0], reverse=True)
+                k = 0
+                for _, s in side_list:
+                    pct = float(s.percentage()) if hasattr(s, "percentage") else 0.0
+                    if pct < 0.06:
+                        s.setLabelArmLengthFactor(0.15 + 0.03 * k)
+                        k += 1
+                    else:
+                        s.setLabelArmLengthFactor(0.15)
+
+                    if pct < 0.03 and hasattr(s, "setExploded"):
+                        s.setExploded(True)
+                        if hasattr(s, "setExplodeDistanceFactor"):
+                            s.setExplodeDistanceFactor(0.06)
+
+            show_legend = False
 
         chart = QChart()
         chart.addSeries(series)
-        chart.setTitle(str(getattr(chart_data, "title", "Type Chart")))
+        chart.setTitle(str(getattr(chart_data, "title", title_fallback)))
+        chart.legend().setVisible(show_legend)
+        chart.setMargins(QMargins(20, 10, 20, 20))
 
-        # hide the top legend
-        chart.legend().setVisible(False)
-
-        # optional: add more breathing room around
-        if hasattr(chart, "setMargins"):
-            from PySide6.QtCore import QMargins
-
-            chart.setMargins(QMargins(20, 10, 20, 20))
-
-        self.type_chart_view.setChart(chart)
+        chart_view.setChart(chart)
 
         total = getattr(chart_data, "total", None)
         meta = getattr(chart_data, "meta", {}) or {}
@@ -781,104 +1010,9 @@ class PokedexWindow(QWidget):
         )
 
         if total is not None:
-            self.lbl_type_chart_info.setText(
-                f"Total Pokémon counted: {total}\n{meta_text}"
-            )
+            info_label.setText(f"Total Pokémon counted: {total}\n{meta_text}")
         else:
-            self.lbl_type_chart_info.setText(meta_text or "—")
-
-    def _render_gen_pie_chart(self, chart_data) -> None:
-        """
-        chart_data is expected to have:
-        - title: str
-        - labels: list[Any]
-        - values: list[int|float]
-        - total: int|float
-        - meta: dict (optional)
-        """
-        series = QPieSeries()
-
-        labels = getattr(chart_data, "labels", []) or []
-        values = getattr(chart_data, "values", []) or []
-
-        for label, value in zip(labels, values):
-            try:
-                v = float(value)
-            except Exception:
-                continue
-            if v <= 0:
-                continue
-
-            slice_ = series.append(str(label), v)
-
-            # label "gen count" outside with arrow
-            count = int(v) if v.is_integer() else v
-            slice_.setLabel(f"{label} {count}")
-            slice_.setLabelVisible(True)
-            slice_.setLabelPosition(QPieSlice.LabelPosition.LabelOutside)
-            slice_.setLabelArmLengthFactor(0.15)
-
-        # Make the pie slightly smaller to leave room for labels
-        if hasattr(series, "setPieSize"):
-            series.setPieSize(0.65)
-
-        # Heuristic to reduce overlap (same idea as type chart)
-        right = []
-        left = []
-        for s in series.slices():
-            if not (hasattr(s, "startAngle") and hasattr(s, "angleSpan")):
-                continue
-
-            mid = float(s.startAngle()) + float(s.angleSpan()) / 2.0
-            rad = math.radians(mid)
-
-            side_is_right = math.cos(rad) >= 0
-            y = math.sin(rad)
-            (right if side_is_right else left).append((y, s))
-
-        for side_list in (right, left):
-            side_list.sort(key=lambda t: t[0], reverse=True)
-            k = 0
-            for _, s in side_list:
-                pct = float(s.percentage()) if hasattr(s, "percentage") else 0.0
-
-                if pct < 0.06:
-                    s.setLabelArmLengthFactor(0.15 + 0.03 * k)
-                    k += 1
-                else:
-                    s.setLabelArmLengthFactor(0.15)
-
-                if pct < 0.03 and hasattr(s, "setExploded"):
-                    s.setExploded(True)
-                    if hasattr(s, "setExplodeDistanceFactor"):
-                        s.setExplodeDistanceFactor(0.06)
-
-        chart = QChart()
-        chart.addSeries(series)
-        chart.setTitle(str(getattr(chart_data, "title", "Generation Chart")))
-        chart.legend().setVisible(False)
-
-        if hasattr(chart, "setMargins"):
-            from PySide6.QtCore import QMargins
-
-            chart.setMargins(QMargins(20, 10, 20, 20))
-
-        self.gen_chart_view.setChart(chart)
-
-        total = getattr(chart_data, "total", None)
-        meta = getattr(chart_data, "meta", {}) or {}
-        meta_text = (
-            ", ".join([f"{k}={v}" for k, v in meta.items()])
-            if isinstance(meta, dict)
-            else str(meta)
-        )
-
-        if total is not None:
-            self.lbl_gen_chart_info.setText(
-                f"Total Pokémon counted: {total}\n{meta_text}"
-            )
-        else:
-            self.lbl_gen_chart_info.setText(meta_text or "—")
+            info_label.setText(meta_text or "—")
 
     # -------------------------------------------------------------------------
     # Language bar
@@ -912,14 +1046,24 @@ class PokedexWindow(QWidget):
         # Refresh top autocomplete
         self._init_pokemon_autocomplete()
 
-        # Refresh statistics catalogs (types + ability/egg autocompletes)
+        # Refresh statistics catalogs (types + ability + items)
         self._init_statistics_catalogs()
 
-        # Re-render charts in the new language (General Statistics)
+        # Re-render charts in the new language
         if hasattr(self, "type_chart_view"):
             self._on_update_type_chart_clicked()
         if hasattr(self, "gen_chart_view"):
             self._on_update_gen_chart_clicked()
+        if hasattr(self, "egg_chart_view"):
+            self._on_update_egg_chart_clicked()
+
+        # Re-render ability charts/description if something is selected
+        if hasattr(self, "ability_search") and self.ability_search.text().strip():
+            self._on_update_ability_details()
+
+        # Re-render item details if something is selected/typed
+        if hasattr(self, "item_search") and self.item_search.text().strip():
+            self._on_update_item_details()
 
         # Reload current Pokémon if any
         if self.current_identifier:
@@ -948,13 +1092,6 @@ class PokedexWindow(QWidget):
 
     def _get_all_pokemon_names(self) -> list[str]:
         return self._get_all_names()
-        # lang = self.current_language_id
-        # df = pokemon_species_names_df[
-        #     pokemon_species_names_df["local_language_id"] == lang
-        #]
-        #if df.empty:
-        #    return pokemon_species_df["identifier"].str.capitalize().tolist()
-        #return df["name"].tolist()
 
     def _on_pokemon_search_text_edited(self, text: str):
         pattern = text.strip().casefold()
@@ -968,14 +1105,25 @@ class PokedexWindow(QWidget):
         ]
         self._pokemon_completer_model.setStringList(matches[:10])
 
-    def _get_all_names(self, names_df=pokemon_species_names_df, base_df=pokemon_species_df,
-                       lang_col='local_language_id', name_col='name', 
-                       base_identifier_col= 'identifier',) -> list[str]:
+    def _get_all_names(
+        self,
+        names_df=pokemon_species_names_df,
+        base_df=pokemon_species_df,
+        lang_col="local_language_id",
+        name_col="name",
+        base_identifier_col="identifier",
+    ) -> list[str]:
         lang = self.current_language_id
-        df = names_df[names_df[lang_col]==lang]
+        df = names_df[names_df[lang_col] == lang]
         if df.empty:
-            return base_df[base_identifier_col].str.replace("-","").str.capitalize().tolist()
-        return df[name_col].tolist()    
+            return (
+                base_df[base_identifier_col]
+                .astype(str)
+                .str.replace("-", "", regex=False)
+                .str.capitalize()
+                .tolist()
+            )
+        return df[name_col].tolist()
 
     # -------------------------------------------------------------------------
     # Data loading (Pokédex tab)
@@ -1016,12 +1164,11 @@ class PokedexWindow(QWidget):
             self._bind_forms(identifier, data)
             self._bind_pokedex_flavor(identifier)
 
-            # NEW binders
+            # Abilities + egg groups (Pokémon tab)
             self._bind_abilities(
                 data.get("abilities") or [],
                 data.get("is_hidden_ability") or [],
             )
-
             self._bind_egg_groups(data.get("egg_groups") or [])
 
             cries = data.get("cries") or []
@@ -1228,8 +1375,7 @@ class PokedexWindow(QWidget):
         if 0 <= idx < len(self._flavor_texts):
             self.lbl_flavor.setText(self._flavor_texts[idx])
 
-    # -------- NEW: Abilities + description --------
-
+    # -------- Abilities (Pokémon tab) --------
     def _bind_abilities(self, abilities: list[str], hidden_flags: list[bool]) -> None:
         self.ability_combo.blockSignals(True)
         self.ability_combo.clear()
@@ -1249,9 +1395,8 @@ class PokedexWindow(QWidget):
         for name_raw, hidden_raw in zip_longest(
             abilities_clean, hidden_clean, fillvalue=False
         ):
-            name: str = str(name_raw)  # <- forces str for type checker
+            name: str = str(name_raw)
             is_hidden_bool: bool = bool(hidden_raw)
-
             display: str = f"{name} (Hidden)" if is_hidden_bool else name
             self.ability_combo.addItem(display, userData=(name, is_hidden_bool))
 
@@ -1272,13 +1417,11 @@ class PokedexWindow(QWidget):
 
         data = self.ability_combo.currentData()
 
-        # Expected: (ability_name, is_hidden_bool)
         if isinstance(data, tuple) and len(data) == 2:
             ability_name, is_hidden = data
             ability_str = str(ability_name).strip()
             is_hidden_bool = bool(is_hidden)
         else:
-            # Fallback if old items exist
             ability_str = str(self.ability_combo.currentText()).strip()
             is_hidden_bool = False
 
@@ -1291,24 +1434,15 @@ class PokedexWindow(QWidget):
             return
 
         try:
-            # Your API must accept (ability: str, is_hidden: bool, language_id: int)
             desc = api.get_ability_description(
-                ability_str,
-                is_hidden_bool,
-                language_id=self.current_language_id,
+                ability_str, is_hidden_bool, language_id=self.current_language_id
             )
-
-            if desc is None:
-                self.lbl_ability_desc.setText("—")
-                return
-
             desc_str = str(desc).replace("\n", " ").replace("\f", " ").strip()
             self.lbl_ability_desc.setText(desc_str if desc_str else "—")
-
         except Exception as e:
             self.lbl_ability_desc.setText(f"Error: {e}")
 
-    # -------- NEW: Egg groups --------
+    # -------- Egg groups (Pokémon tab) --------
     def _bind_egg_groups(self, egg_groups: list[str]):
         egg_groups = [str(e).strip() for e in (egg_groups or []) if str(e).strip()]
         if not egg_groups:
@@ -1342,14 +1476,19 @@ class PokedexWindow(QWidget):
             QMessageBox.warning(self, "Audio", f"Could not play cry:\n{e}")
 
     # -------------------------------------------------------------------------
-    # Statistics catalogs + autocompletes (type filters + ability/egg search)
+    # Statistics catalogs + autocompletes
     # -------------------------------------------------------------------------
 
     def _init_statistics_catalogs(self):
-        # Fill type filters
+        # Fill type filters (ranking)
         self._fill_type_filter_combo(self.rank_type_filter_combo)
-        self._fill_type_filter_combo(self.ability_type_filter_combo)
-        self._fill_type_filter_combo(self.egg_type_filter_combo)
+
+        # Fill chart type filter combos (must have userData as canonical identifier)
+        if hasattr(self, "gen_type_filter_combo"):
+            self._fill_chart_type_filter_combo(self.gen_type_filter_combo)
+
+        if hasattr(self, "egg_type_filter_combo"):
+            self._fill_chart_type_filter_combo(self.egg_type_filter_combo)
 
         # Abilities completer
         ability_names = self._fetch_catalog_strings("get_all_abilities")
@@ -1361,58 +1500,41 @@ class PokedexWindow(QWidget):
         self._ability_completer.setCompletionMode(
             QCompleter.CompletionMode.PopupCompletion
         )
-        self.ability_search.setCompleter(self._ability_completer)
 
-        # Egg groups completer
-        egg_names = self._fetch_catalog_strings("get_all_egg_groups")
-        self._egg_model = QStringListModel(
-            sorted(set(egg_names), key=str.casefold), self
+        if hasattr(self, "ability_search"):
+            self.ability_search.setCompleter(self._ability_completer)
+            try:
+                self._ability_completer.activated.connect(
+                    lambda _=None: self._on_update_ability_details()
+                )
+            except Exception:
+                pass
+
+        # Items completer
+        item_names = self._fetch_catalog_strings("get_all_items")
+        self._item_model = QStringListModel(
+            sorted(set(item_names), key=str.casefold), self
         )
-        self._egg_completer = QCompleter(self._egg_model, self)
-        self._egg_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self._egg_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        self.egg_search.setCompleter(self._egg_completer)
+        self._item_completer = QCompleter(self._item_model, self)
+        self._item_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._item_completer.setCompletionMode(
+            QCompleter.CompletionMode.PopupCompletion
+        )
 
-        # Generation chart type filter combo (General Statistics)
+        if hasattr(self, "item_search"):
+            self.item_search.setCompleter(self._item_completer)
+            try:
+                self._item_completer.activated.connect(
+                    lambda _=None: self._on_update_item_details()
+                )
+            except Exception:
+                pass
+
+        # Initial fill triggers
         if hasattr(self, "gen_type_filter_combo"):
-            self._fill_gen_type_filter_combo()
-
-    # -------------------------------------------------------------------------
-    # Top autocomplete (Eggs groups)
-    # -------------------------------------------------------------------------
-
-    def _init_egg_autocomplete(self):
-        all_names = self._get_all_egg_group_names()
-        self._all_egg_names = sorted(set(all_names), key=str.casefold)
-
-        self._egg_completer_model = QStringListModel(self._all_egg_names, self)
-        self._egg_completer = QCompleter(self._egg_completer_model, self)
-
-        self._egg_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        self._egg_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-
-        self._egg_completer.setFilterMode(Qt.MatchFlag.MatchStartsWith)
-        self.egg_search.setCompleter(self._egg_completer)
-
-        
-    def _on_egg_search_text_edited(self, text: str):
-        pattern = text.strip().casefold()
-        if not pattern:
-            self._egg_completer_model.setStringList([])
-            return
-        matches = [
-            name
-            for name in self._all_egg_names
-            if name.casefold().startswith(pattern)
-        ]
-        self._egg_completer_model.setStringList(matches[:3])
-
-    def _get_all_egg_group_names(self) -> list[str]:
-        return self._get_all_names(names_df=egg_groups_prose_df, base_df=egg_groups_df,
-                                   lang_col="local_language_id", name_col="name",
-                                   base_identifier_col="identifier",
-                                   )
-    # -------------------------------------------------------------------------
+            self._on_update_gen_chart_clicked()
+        if hasattr(self, "egg_type_filter_combo"):
+            self._on_update_egg_chart_clicked()
 
     def _fetch_catalog_strings(self, api_method_name: str) -> list[str]:
         """
@@ -1431,7 +1553,7 @@ class PokedexWindow(QWidget):
 
         out: list[str] = []
         for it in items or []:
-            if isinstance(it, (list | tuple)) and len(it) >= 2:
+            if isinstance(it, list | tuple) and len(it) >= 2:
                 out.append(str(it[1]))
             else:
                 out.append(str(it))
@@ -1446,7 +1568,7 @@ class PokedexWindow(QWidget):
             try:
                 items = api.get_all_types(language_id=self.current_language_id)
                 for it in items or []:
-                    if isinstance(it, (list | tuple)) and len(it) >= 2:
+                    if isinstance(it, list | tuple) and len(it) >= 2:
                         key = str(it[0])
                         label = str(it[1])
                         combo.addItem(label, userData=key)
@@ -1458,119 +1580,53 @@ class PokedexWindow(QWidget):
 
         combo.blockSignals(False)
 
-    # -------------------------------------------------------------------------
-    # Statistics actions
-    # -------------------------------------------------------------------------
+    def _fill_chart_type_filter_combo(self, combo: QComboBox) -> None:
+        """
+        Fill a type filter combo where userData must be the canonical type identifier
+        (e.g., "fire", "water"), independent of localized labels.
+        """
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All types", userData=None)
 
-    def _on_compute_rank_clicked(self):
-        # Uses TOP search bar (self.input_name), fallback to current_identifier
-        ident = self.input_name.text().strip() or (self.current_identifier or "")
-        if not ident:
-            QMessageBox.warning(
-                self, "Statistics", "Type a Pokémon name/number in the top bar first."
-            )
-            return
+        added_any = False
+        if hasattr(api, "get_all_types"):
+            try:
+                items = api.get_all_types(language_id=self.current_language_id) or []
+                for it in items:
+                    if isinstance(it, list | tuple) and len(it) >= 2:
+                        raw_key = str(it[0]).strip()
+                        label = str(it[1]).strip()
+                    else:
+                        raw_key = str(it).strip()
+                        label = raw_key
 
-        stat_key = self.rank_stat_combo.currentText().strip()
-        type_filter = self.rank_type_filter_combo.currentData()
+                    identifier: str | None = None
 
-        if not hasattr(api, "get_stat_rank"):
-            self.lbl_rank_result.setText("TODO: implement api.get_stat_rank(...)")
-            return
+                    if raw_key.isdigit():
+                        tid = int(raw_key)
+                        if 1 <= tid <= len(TYPE_IDENTIFIERS):
+                            identifier = TYPE_IDENTIFIERS[tid - 1]
+                    else:
+                        identifier = raw_key.lower()
 
-        try:
-            res = api.get_stat_rank(
-                identifier=ident,
-                stat_key=stat_key,
-                language_id=self.current_language_id,
-                type_filter=type_filter,
-            )
-            rank = res.get("rank")
-            total = res.get("total")
-            value = res.get("value")
-            self.lbl_rank_result.setText(
-                f"{ident} • {stat_key} rank: {rank}/{total} (value: {value})"
-            )
-        except Exception as e:
-            self.lbl_rank_result.setText(f"Error: {e}")
+                    if identifier:
+                        combo.addItem(label, userData=identifier)
+                        added_any = True
+            except Exception:
+                added_any = False
 
-    def _on_count_ability_clicked(self):
-        ability_text = self.ability_search.text().strip()
-        if not ability_text:
-            QMessageBox.warning(self, "Statistics", "Type an ability name first.")
-            return
+        if not added_any:
+            for ident in TYPE_IDENTIFIERS:
+                combo.addItem(ident.capitalize(), userData=ident)
 
-        type_filter = self.ability_type_filter_combo.currentData()
-
-        if not hasattr(api, "count_pokemon_with_ability"):
-            self.lbl_ability_count.setText(
-                "TODO: implement api.count_pokemon_with_ability(...)"
-            )
-            return
-
-        try:
-            n = api.count_pokemon_with_ability(ability_text, type_filter=type_filter)
-            self.lbl_ability_count.setText(f"Pokémon with '{ability_text}': {n}")
-        except Exception as e:
-            self.lbl_ability_count.setText(f"Error: {e}")
-
-    def _on_count_egg_clicked(self):
-        egg_text = self.egg_search.text().strip()
-        if not egg_text:
-            QMessageBox.warning(self, "Statistics", "Type an egg group name first.")
-            return
-
-        type_filter = self.egg_type_filter_combo.currentData()
-
-        if not hasattr(api, "count_pokemon_in_egg_group"):
-            self.lbl_egg_count.setText(
-                "TODO: implement api.count_pokemon_in_egg_group(...)"
-            )
-            return
-
-        try:
-            n = api.count_pokemon_in_egg_group(egg_text, type_filter=type_filter)
-            self.lbl_egg_count.setText(f"Pokémon in '{egg_text}': {n}")
-        except Exception as e:
-            self.lbl_egg_count.setText(f"Error: {e}")
+        combo.blockSignals(False)
 
 
 # ---- Entrypoint ---------------------------------------------------------------
 
 
 def run():
-    # r"""This is a typed function.
-    # This docstring is made so that it renders nicely on sphinx. It features notes,
-    # arguments, cross references (here, to numpy documentation), maths and examples.
-
-    # Notes:
-    #     - This is a section with multiple notes
-    #     - This second note has maths! :math:`p \in \mathbb{N}`
-
-    # .. math::
-    #     :label: equation1
-
-    #     D = \sum_{0 \le i < p} \alpha_i
-
-    # Args:
-    #     a: first parameter, its description is really, and fits in
-    #         two lines (note the indentation). The object must be a :obj:`np.ndarray`
-    #     b: second parameter. Defaults to empty string.
-
-    # Examples
-    #     >>> typed_function(np.zeros(10))
-    #     False
-
-    #     >>> typed_function(
-    #     ...     np.zeros(10),
-    #     ...     "hello"
-    #     ... )
-    #     False
-
-    # Returns:
-    #     Always return False, it's not a very interesting function. See :eq:`equation1`
-    #     for some more maths.
-    # """
     app = QApplication(sys.argv)
     w = PokedexWindow()
     w.show()

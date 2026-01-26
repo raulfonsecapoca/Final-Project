@@ -40,6 +40,11 @@ ability_flavor_text_df = pd.read_csv("data/csv/ability_flavor_text.csv")
 generation_names_df = pd.read_csv("data/csv/generation_names.csv")
 
 
+items_df = pd.read_csv("data/csv/items.csv")
+item_names_df = pd.read_csv("data/csv/item_names.csv")
+item_flavor_text_df = pd.read_csv("data/csv/item_flavor_text.csv")
+
+
 @dataclass(frozen=True)
 class ChartData:
     title: str
@@ -304,13 +309,6 @@ class PokedexAPI:
             raise ValueError("Ability is empty")
 
         # 1) Find ability_id by ability name (case-insensitive)
-        if (
-            "name" not in ability_names_df.columns
-            or "ability_id" not in ability_names_df.columns
-        ):
-            raise ValueError(
-                "ability_names_df must have columns: 'name' and 'ability_id'"
-            )
 
         row = ability_names_df[
             ability_names_df["name"].astype(str).str.casefold()
@@ -494,11 +492,304 @@ class PokedexAPI:
 
     @staticmethod
     def get_all_abilities(language_id: int = 9) -> list[str] | list[tuple[str, str]]:
-        return ["overgrow", "blaze"]
+        ability_names_df_filtered = ability_names_df[
+            ability_names_df["local_language_id"] == language_id
+        ]["name"].tolist()
+        return ability_names_df_filtered
 
     @staticmethod
     def get_all_egg_groups(language_id: int = 9) -> list[str] | list[tuple[str, str]]:
-        return ["monster", "dragon"]
+        egg_groups_prose_df_filtered = egg_groups_prose_df[
+            egg_groups_prose_df["local_language_id"] == language_id
+        ]["name"].tolist()
+        return egg_groups_prose_df_filtered
+
+    @staticmethod
+    def get_all_items(language_id: int = 9) -> list[str] | list[tuple[str, str]]:
+        all_item_ids = item_flavor_text_df["item_id"].tolist()
+        item_names_df_filtered = item_names_df[
+            item_names_df["local_language_id"] == language_id
+        ]["name"]
+
+        item_names_df_filtered = item_names_df_filtered[
+            item_names_df_filtered.index.isin(all_item_ids)
+        ].tolist()
+
+        return item_names_df_filtered
+
+    @staticmethod
+    def get_egg_chart(
+        language_id: int = 9,
+        type_filter: str | None = None,
+        generations_enable: list[bool] | None = None,
+    ) -> ChartData:
+        if generations_enable is None:
+            generations_enable = [True] * 9
+
+        egg_df = pokemon_egg_groups_df.copy()
+
+        # 1) Generation filtering (exclude disabled gens) using species_id directly
+        disabled_gens = [
+            i + 1 for i, enabled in enumerate(generations_enable) if not enabled
+        ]
+        if disabled_gens:
+            species_to_exclude = pokemon_species_df[
+                pokemon_species_df["generation_id"].isin(disabled_gens)
+            ]["id"].unique()
+            egg_df = egg_df[~egg_df["species_id"].isin(species_to_exclude)]
+
+        # 2) Type filter (keep only species that have the given type)
+        if type_filter is not None:
+            type_row = types_df[
+                types_df["identifier"].astype(str).str.lower()
+                == str(type_filter).lower()
+            ]
+            if type_row.empty:
+                raise ValueError(f"Type '{type_filter}' not found")
+            type_id = int(type_row["id"].iloc[0])
+
+            pokemon_ids_with_type = pokemon_types_df[
+                pokemon_types_df["type_id"] == type_id
+            ]["pokemon_id"].unique()
+
+            species_ids_with_type = pokemon_df[
+                pokemon_df["id"].isin(pokemon_ids_with_type)
+            ]["species_id"].unique()
+
+            egg_df = egg_df[egg_df["species_id"].isin(species_ids_with_type)]
+
+        # 3) Count
+        counts = egg_df["egg_group_id"].value_counts()
+        values = counts.values.tolist()
+        egg_group_ids = counts.index.tolist()
+
+        # 4) Labels (always append, with fallback)
+        labels: list[str] = []
+        for egg_id in egg_group_ids:
+            s = egg_groups_prose_df[
+                (egg_groups_prose_df["egg_group_id"] == egg_id)
+                & (egg_groups_prose_df["local_language_id"] == language_id)
+            ]["name"]
+
+            if s.empty:
+                s = egg_groups_prose_df[
+                    (egg_groups_prose_df["egg_group_id"] == egg_id)
+                    & (egg_groups_prose_df["local_language_id"] == 9)
+                ]["name"]
+
+            labels.append(str(s.iloc[0]) if not s.empty else str(egg_id))
+
+        total = int(egg_df["species_id"].nunique())
+
+        return ChartData(
+            title="Egg Group Chart",
+            labels=labels,
+            values=values,
+            total=total,
+            meta={"description": "Egg group chart for all egg groups"},
+        )
+
+    @staticmethod
+    def get_ability_type_chart(
+        ability: str,
+        language_id: int = 9,
+    ) -> ChartData:
+        ability_str = str(ability).strip()
+        if not ability_str:
+            raise ValueError("Ability is empty")
+
+        # 1) Find ability_id by ability name (case-insensitive)
+
+        row = ability_names_df[
+            ability_names_df["name"].astype(str).str.casefold()
+            == ability_str.casefold()
+        ]
+
+        # Optional fallback: if you store identifiers too
+        if row.empty and "identifier" in ability_names_df.columns:
+            row = ability_names_df[
+                ability_names_df["identifier"].astype(str).str.casefold()
+                == ability_str.casefold()
+            ]
+
+        if row.empty:
+            raise ValueError(f"Ability '{ability_str}' not found in ability_names_df")
+
+        ability_id = int(row["ability_id"].iloc[0])
+
+        pokemon_filtered = pokemon_abilities_df[
+            pokemon_abilities_df["ability_id"] == ability_id
+        ]["pokemon_id"].tolist()
+
+        pokemon_types_df_filtered = pokemon_types_df[
+            pokemon_types_df["pokemon_id"].isin(pokemon_filtered)
+        ]
+
+        count_by_type = pokemon_types_df_filtered["type_id"].value_counts().to_dict()
+
+        labels = list(count_by_type.keys())
+        out: list[str] = []
+        for label in labels:
+            s = type_names_df[
+                (type_names_df["type_id"] == label)
+                & (type_names_df["local_language_id"] == language_id)
+            ]["name"]
+
+            if s.empty:
+                s = type_names_df[
+                    (type_names_df["type_id"] == label)
+                    & (type_names_df["local_language_id"] == 9)
+                ]["name"]
+
+            out.append(str(s.iloc[0]))
+        labels = out
+
+        values = list(count_by_type.values())
+        total = pokemon_types_df_filtered["pokemon_id"].nunique()
+
+        return ChartData(
+            title="Type Chart - Ability: " + ability_str,
+            labels=labels,
+            values=values,
+            total=total,
+            meta={"description": "Type chart for selected ability"},
+        )
+
+    @staticmethod
+    def get_ability_gen_chart(
+        ability: str,
+        language_id: int = 9,
+    ) -> ChartData:
+        ability_str = str(ability).strip()
+        if not ability_str:
+            raise ValueError("Ability is empty")
+
+        # 1) Find ability_id by ability name (case-insensitive)
+
+        row = ability_names_df[
+            ability_names_df["name"].astype(str).str.casefold()
+            == ability_str.casefold()
+        ]
+
+        # Optional fallback: if you store identifiers too
+        if row.empty and "identifier" in ability_names_df.columns:
+            row = ability_names_df[
+                ability_names_df["identifier"].astype(str).str.casefold()
+                == ability_str.casefold()
+            ]
+
+        if row.empty:
+            raise ValueError(f"Ability '{ability_str}' not found in ability_names_df")
+
+        ability_id = int(row["ability_id"].iloc[0])
+
+        pokemon_filtered = pokemon_abilities_df[
+            pokemon_abilities_df["ability_id"] == ability_id
+        ]["pokemon_id"].tolist()
+
+        pokemon_df_filtered = pokemon_df[pokemon_df["id"].isin(pokemon_filtered)]
+        pokemon_species_df_filtered = pokemon_species_df[
+            pokemon_species_df["id"].isin(pokemon_filtered)
+        ]
+
+        count_by_gen = (
+            pokemon_species_df_filtered["generation_id"].value_counts().to_dict()
+        )
+
+        labels = list(count_by_gen.keys())
+        out: list[str] = []
+        for label in labels:
+            s = generation_names_df[
+                (generation_names_df["generation_id"] == label)
+                & (generation_names_df["local_language_id"] == language_id)
+            ]["name"]
+
+            if s.empty:
+                s = generation_names_df[
+                    (generation_names_df["generation_id"] == label)
+                    & (generation_names_df["local_language_id"] == 9)
+                ]["name"]
+
+            out.append(str(s.iloc[0]))
+        labels = out
+
+        values = list(count_by_gen.values())
+        total = pokemon_df_filtered["species_id"].nunique()
+
+        return ChartData(
+            title="Generation Chart - Ability: " + ability_str,
+            labels=labels,
+            values=values,
+            total=total,
+            meta={"description": "Generation chart for selected ability"},
+        )
+
+    @staticmethod
+    def get_item(item: str, language_id: int = 9) -> dict:
+        item_str = str(item).strip()
+
+        if not item_str:
+            raise ValueError("Item is empty")
+
+        # 1) Find item_id by item name (case-insensitive)
+
+        row = item_names_df[
+            item_names_df["name"].astype(str).str.casefold() == item_str.casefold()
+        ]
+
+        # Optional fallback: if you store item_id too
+        if row.empty:
+            row = item_names_df[
+                item_names_df["item_id"].astype(str).str.casefold()
+                == item_str.casefold()
+            ]
+
+        if row.empty:
+            raise ValueError(f"Item '{item_str}' not found in item_names_df")
+        item_id = int(row["item_id"].iloc[0])
+
+        # 2) Get flavor text in requested language, fallback to English (9)
+        flavor = item_flavor_text_df[
+            (item_flavor_text_df["item_id"] == item_id)
+            & (item_flavor_text_df["language_id"] == language_id)
+        ]
+
+        if flavor.empty:
+            flavor = item_flavor_text_df[
+                (item_flavor_text_df["item_id"] == item_id)
+                & (item_flavor_text_df["language_id"] == 9)
+            ]
+
+        if flavor.empty or "flavor_text" not in flavor.columns:
+            raise ValueError(
+                f"Item '{item_str}' description not found for language ID '{language_id}'"
+            )
+
+        item_name = item_names_df[(item_names_df["item_id"] == item_id)]
+
+        item_name = item_name[item_name["local_language_id"] == language_id]["name"]
+
+        if item_name.empty:
+            item_name = item_names_df[
+                (item_names_df["item_id"] == item_id)
+                & (item_names_df["local_language_id"] == 9)
+            ]["name"]
+
+        identifier = items_df[items_df["id"] == item_id]["identifier"]
+        if identifier.empty:
+            raise ValueError(f"Item identifier not found for item ID '{item_id}'")
+        identifier = identifier.iloc[0]
+
+        # Last available flavor text (latest game version)
+
+        text = str(flavor["flavor_text"].iloc[-1])
+        text = text.replace("\n", " ").replace("\f", " ").strip()
+
+        return {
+            "name": item_name.iloc[0] if not item_name.empty else "Unknown",
+            "item_flavor_text": text,
+            "image": f"data/sprites/sprites/items/{str(identifier)}.png",
+        }
 
     @staticmethod
     def get_stat_rank(
