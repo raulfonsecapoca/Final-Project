@@ -506,16 +506,17 @@ class PokedexAPI:
 
     @staticmethod
     def get_all_items(language_id: int = 9) -> list[str] | list[tuple[str, str]]:
-        all_item_ids = item_flavor_text_df["item_id"].tolist()
+        all_item_ids = item_flavor_text_df["item_id"].unique().tolist()
+
         item_names_df_filtered = item_names_df[
             item_names_df["local_language_id"] == language_id
-        ]["name"]
+        ]
 
-        item_names_df_filtered = item_names_df_filtered[
-            item_names_df_filtered.index.isin(all_item_ids)
-        ].tolist()
+        item_names_filtered = item_names_df_filtered[
+            item_names_df_filtered["item_id"].isin(all_item_ids)
+        ]["name"].tolist()
 
-        return item_names_df_filtered
+        return item_names_filtered
 
     @staticmethod
     def get_egg_chart(
