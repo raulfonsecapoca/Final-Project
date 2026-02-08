@@ -4,6 +4,7 @@ sphinx and the right syntaxe for docstrings.
 
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 pokemon_df = pd.read_csv("data/csv/pokemon.csv")
@@ -791,6 +792,266 @@ class PokedexAPI:
             "item_flavor_text": text,
             "image": f"data/sprites/sprites/items/{str(identifier)}.png",
         }
+
+    @staticmethod
+    def get_stat_histogram(
+        identifier: str | int,
+        stat_key: str,  # "HP","Atk","Def","SpA","SpD","Spe" (also accepts "hp", "attack", etc.)
+        language_id: int = 9,
+        type_filter: str | None = None,  # types_df.identifier (e.g. "electric")
+        forms_enable: bool = False,
+        generations_enable: list[bool] | None = None,
+        bins: int = 20,
+        clamp_range: tuple[int, int]
+        | None = None,  # e.g. (0, 255) if you want fixed range
+        form: int | str | None = None,  # optional, same idea as get_pokemon
+    ) -> ChartData:
+        """
+        Build a histogram of a given base stat over the pokemons selected by filters,
+        and include metadata to highlight the selected pokemon.
+
+        Also includes ranking info for the selected pokemon within the filtered set:
+        - selected_rank: 1 means best/highest value
+        - rank_total: number of pokemons considered
+        - selected_value: absolute stat value
+
+        Returns:
+            ChartData: labels are bin ranges, values are counts, meta includes selected marker + rank info.
+        """
+
+        if generations_enable is None:
+            generations_enable = [True] * 9
+
+        stat_key_clean = str(stat_key).strip()
+
+        alias_map = {
+            "HP": "hp",
+            "Atk": "attack",
+            "Def": "defense",
+            "SpA": "special-attack",
+            "SpD": "special-defense",
+            "Spe": "speed",
+        }
+
+        if stat_key_clean in alias_map:
+            stat_identifier = alias_map[stat_key_clean]
+        else:
+            stat_identifier = stat_key_clean.lower().replace(" ", "-")
+
+        stat_row = stats_df[
+            stats_df["identifier"].astype(str).str.casefold()
+            == stat_identifier.casefold()
+        ]
+        if stat_row.empty:
+            try:
+                stat_id = int(stat_key_clean)
+            except ValueError as e:
+                raise ValueError(
+                    f"Unknown stat_key '{stat_key}'. Expected one of {list(alias_map.keys())} or a stats_df identifier."
+                ) from e
+        else:
+            stat_id = int(stat_row["id"].iloc[0])
+
+        if not forms_enable:
+            pokemon_df_filtered = pokemon_df[pokemon_df["id"] <= 10000].copy()
+        else:
+            pokemon_df_filtered = pokemon_df.copy()
+
+        disabled_gens = [
+            i + 1 for i, enabled in enumerate(generations_enable) if not enabled
+        ]
+        if disabled_gens:
+            species_to_exclude = pokemon_species_df[
+                pokemon_species_df["generation_id"].isin(disabled_gens)
+            ]["id"].unique()
+
+            pokemon_df_filtered = pokemon_df_filtered[
+                ~pokemon_df_filtered["species_id"].isin(species_to_exclude)
+            ]
+
+        type_id_filter: int | None = None
+        if type_filter is not None:
+            type_row = types_df[
+                types_df["identifier"].astype(str).str.casefold()
+                == str(type_filter).casefold()
+            ]
+            if type_row.empty:
+                raise ValueError(f"Type '{type_filter}' not found")
+            type_id_filter = int(type_row["id"].iloc[0])
+
+            pokemon_ids_with_type = pokemon_types_df[
+                pokemon_types_df["type_id"] == type_id_filter
+            ]["pokemon_id"].unique()
+
+            pokemon_df_filtered = pokemon_df_filtered[
+                pokemon_df_filtered["id"].isin(pokemon_ids_with_type)
+            ]
+
+        pokemon_ids = pokemon_df_filtered["id"].unique()
+
+        stat_values_df = pokemon_stats_df[
+            (pokemon_stats_df["pokemon_id"].isin(pokemon_ids))
+            & (pokemon_stats_df["stat_id"] == stat_id)
+        ][["pokemon_id", "base_stat"]].copy()
+
+        if stat_values_df.empty:
+            return ChartData(
+                title=f"Histogram - {stat_key_clean}",
+                labels=[],
+                values=[],
+                total=0,
+                meta={
+                    "description": "No data for selected filters",
+                    "stat_key": stat_key_clean,
+                    "stat_id": str(stat_id),
+                    "selected_identifier": str(identifier),
+                    "selected_pokemon_id": "None",
+                    "selected_value": "None",
+                    "selected_bin_index": "None",
+                    "selected_rank": "None",
+                    "rank_total": "0",
+                    "tied_with": "None",
+                    "type_filter": str(type_filter)
+                    if type_filter is not None
+                    else "None",
+                    "forms_enable": str(bool(forms_enable)),
+                    "generations_enable": ",".join(
+                        ["1" if x else "0" for x in generations_enable]
+                    ),
+                    "language_id": str(language_id),
+                },
+            )
+
+        values = stat_values_df["base_stat"].astype(int).to_numpy()
+
+        vmin = int(values.min())
+        vmax = int(values.max())
+
+        if clamp_range is not None:
+            cmin, cmax = clamp_range
+            vmin = min(vmin, int(cmin))
+            vmax = max(vmax, int(cmax))
+
+        if vmin == vmax:
+            edges = np.array([vmin - 1, vmax + 1], dtype=float)
+        else:
+            edges = np.linspace(vmin, vmax, int(bins) + 1, dtype=float)
+
+        counts, bin_edges = np.histogram(values, bins=edges)
+
+        labels: list[str] = []
+        for i in range(len(bin_edges) - 1):
+            left = int(round(bin_edges[i]))
+            right = int(round(bin_edges[i + 1]))
+            if i < len(bin_edges) - 2:
+                labels.append(f"{left}–{right - 1}")
+            else:
+                labels.append(f"{left}–{right}")
+
+        # Resolve selected pokemon_id (species identifier or name; optional explicit form)
+        selected_pokemon_id: int | None = None
+        if isinstance(identifier, str):
+            try:
+                dex = int(identifier)
+                species_row = pokemon_species_df[pokemon_species_df["id"] == dex]
+            except ValueError:
+                species_row = pokemon_species_df[
+                    pokemon_species_df["identifier"].astype(str).str.casefold()
+                    == identifier.casefold()
+                ]
+        else:
+            species_row = pokemon_species_df[pokemon_species_df["id"] == identifier]
+
+        if not species_row.empty:
+            dex_num = int(species_row["id"].iloc[0])
+
+            if form is not None:
+                form_row = pokemon_df[
+                    pokemon_df["identifier"].astype(str).str.casefold()
+                    == str(form).casefold()
+                ]
+                if not form_row.empty:
+                    selected_pokemon_id = int(form_row["id"].iloc[0])
+            else:
+                base_row = pokemon_df[pokemon_df["species_id"] == dex_num].sort_values(
+                    "id"
+                )
+                if not base_row.empty:
+                    selected_pokemon_id = int(base_row["id"].iloc[0])
+
+        selected_value: int | None = None
+        selected_bin_index: int | None = None
+        selected_rank: int | None = None
+        tied_with: int | None = None
+
+        total = int(stat_values_df["pokemon_id"].nunique())
+
+        selected_in_filtered = (
+            selected_pokemon_id is not None
+            and selected_pokemon_id
+            in set(stat_values_df["pokemon_id"].astype(int).tolist())
+        )
+
+        if selected_pokemon_id is not None:
+            sel_row = pokemon_stats_df[
+                (pokemon_stats_df["pokemon_id"] == selected_pokemon_id)
+                & (pokemon_stats_df["stat_id"] == stat_id)
+            ]
+            if not sel_row.empty:
+                selected_value = int(sel_row["base_stat"].iloc[0])
+
+                # bin index only makes sense if the selected pokemon is in the filtered distribution
+                if selected_in_filtered and len(bin_edges) >= 2:
+                    if selected_value == int(round(bin_edges[-1])):
+                        selected_bin_index = len(counts) - 1
+                    else:
+                        idx = int(
+                            np.searchsorted(bin_edges, selected_value, side="right") - 1
+                        )
+                        if 0 <= idx < len(counts):
+                            selected_bin_index = idx
+
+                # Ranking only within filtered set
+                if selected_in_filtered:
+                    base_stats_series = stat_values_df["base_stat"].astype(int)
+                    higher_count = int((base_stats_series > selected_value).sum())
+                    selected_rank = higher_count + 1
+                    tied_with = int((base_stats_series == selected_value).sum())
+
+        return ChartData(
+            title=f"Histogram - {stat_key_clean}",
+            labels=labels,
+            values=counts.astype(int).tolist(),
+            total=total,
+            meta={
+                "description": "Base stat histogram with selected marker + rank",
+                "stat_key": stat_key_clean,
+                "stat_id": str(stat_id),
+                "bins": str(len(counts)),
+                "bin_edges": ",".join([str(float(x)) for x in bin_edges.tolist()]),
+                "selected_identifier": str(identifier),
+                "selected_pokemon_id": str(selected_pokemon_id)
+                if selected_pokemon_id is not None
+                else "None",
+                "selected_value": str(selected_value)
+                if selected_value is not None
+                else "None",
+                "selected_bin_index": str(selected_bin_index)
+                if selected_bin_index is not None
+                else "None",
+                "selected_rank": str(selected_rank)
+                if selected_rank is not None
+                else "None",
+                "rank_total": str(total),
+                "tied_with": str(tied_with) if tied_with is not None else "None",
+                "type_filter": str(type_filter) if type_filter is not None else "None",
+                "forms_enable": str(bool(forms_enable)),
+                "generations_enable": ",".join(
+                    ["1" if x else "0" for x in generations_enable]
+                ),
+                "language_id": str(language_id),
+            },
+        )
 
     @staticmethod
     def get_stat_rank(

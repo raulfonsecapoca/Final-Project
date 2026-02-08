@@ -38,7 +38,16 @@ from pathlib import Path
 
 import pandas as pd
 import requests
-from PySide6.QtCharts import QChart, QChartView, QPieSeries, QPieSlice
+from PySide6.QtCharts import (
+    QBarCategoryAxis,
+    QBarSeries,
+    QBarSet,
+    QChart,
+    QChartView,
+    QPieSeries,
+    QPieSlice,
+    QValueAxis,
+)
 from PySide6.QtCore import QMargins, QSize, QStringListModel, Qt, QUrl
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -408,33 +417,9 @@ class PokedexWindow(QWidget):
         # ---------------- Subtab: General Statistics ----------------
         self._build_general_statistics_subtab()
 
-        # ---------------- Subtab: Pokemon (Ranking) ----------------
-        self.rank_group = QGroupBox("Stat Ranking (uses the top search bar)")
-        hint = QLabel(
-            "Use the top search bar to choose the Pokémon, then compute rank here."
-        )
-        hint.setWordWrap(True)
-
-        self.rank_stat_combo = QComboBox()
-        self.rank_stat_combo.addItems(["HP", "Atk", "Def", "SpA", "SpD", "Spe"])
-
-        self.rank_type_filter_combo = QComboBox()
-        self.rank_type_filter_combo.addItem("All types", userData=None)
-
-        self.lbl_rank_result = QLabel("—")
-        self.lbl_rank_result.setWordWrap(True)
-
-        rg = QGridLayout()
-        rg.addWidget(hint, 0, 0, 1, 2)
-        rg.addWidget(QLabel("Stat:"), 1, 0)
-        rg.addWidget(self.rank_stat_combo, 1, 1)
-        rg.addWidget(QLabel("Type filter:"), 2, 0)
-        rg.addWidget(self.rank_type_filter_combo, 2, 1)
-        rg.addWidget(self.lbl_rank_result, 3, 0, 1, 2)
-        self.rank_group.setLayout(rg)
-
+        # ---------------- Subtab: Pokemon (Histogram) ----------------
         pokemon_layout = QVBoxLayout(self.stats_tab_pokemon)
-        pokemon_layout.addWidget(self.rank_group)
+        self._build_pokemon_histogram_section(pokemon_layout)
         pokemon_layout.addStretch()
 
         # ---------------- Subtab: Egg Groups (CHART ONLY) ----------------
@@ -530,6 +515,88 @@ class PokedexWindow(QWidget):
         # Initial render
         self._on_update_type_chart_clicked()
         self._on_update_gen_chart_clicked()
+
+    def _build_pokemon_histogram_section(self, parent_layout: QVBoxLayout) -> None:
+        """
+        Statistics > Pokemon subtab: histogram page.
+        Uses api.get_stat_histogram(...) and the top search bar as selected Pokémon.
+        """
+
+        self.hist_group = QGroupBox("Stat Histogram (uses the top search bar)")
+
+        hint = QLabel(
+            "Type a Pokémon in the top search bar (name or number), then choose a stat and filters below."
+        )
+        hint.setWordWrap(True)
+
+        # Filters (same style as General Statistics)
+        self.hist_chk_forms_enable = QCheckBox("Enable alternative forms")
+        self.hist_chk_forms_enable.setChecked(False)
+
+        hist_gens_box = QGroupBox("Generations")
+        hist_gens_layout = QGridLayout()
+        self.hist_gen_checkboxes: list[QCheckBox] = []
+        for i in range(1, 10):  # 1..9
+            cb = QCheckBox(f"Gen {i}")
+            cb.setChecked(True)
+            self.hist_gen_checkboxes.append(cb)
+            r = (i - 1) // 3
+            c = (i - 1) % 3
+            hist_gens_layout.addWidget(cb, r, c)
+        hist_gens_box.setLayout(hist_gens_layout)
+
+        # Controls row: stat + type filter + bins
+        self.hist_stat_combo = QComboBox()
+        self.hist_stat_combo.addItems(["HP", "Atk", "Def", "SpA", "SpD", "Spe"])
+
+        self.hist_type_filter_combo = QComboBox()
+        self.hist_type_filter_combo.addItem("All types", userData=None)
+
+        self.hist_bins_combo = QComboBox()
+        self.hist_bins_combo.setEditable(True)
+        self.hist_bins_combo.addItems(["10", "15", "20", "25", "30", "40"])
+        self.hist_bins_combo.setCurrentText("20")
+
+        controls_row = QGridLayout()
+        controls_row.addWidget(QLabel("Stat:"), 0, 0)
+        controls_row.addWidget(self.hist_stat_combo, 0, 1)
+        controls_row.addWidget(QLabel("Type filter:"), 1, 0)
+        controls_row.addWidget(self.hist_type_filter_combo, 1, 1)
+        controls_row.addWidget(QLabel("Bins:"), 2, 0)
+        controls_row.addWidget(self.hist_bins_combo, 2, 1)
+
+        controls_box = QGroupBox("Histogram Controls")
+        controls_box.setLayout(controls_row)
+
+        # Chart
+        self.hist_chart_view = QChartView()
+        self.lbl_hist_info = QLabel("—")
+        self.lbl_hist_info.setWordWrap(True)
+
+        layout = QVBoxLayout()
+        layout.addWidget(hint)
+        layout.addWidget(self.hist_chk_forms_enable)
+        layout.addWidget(hist_gens_box)
+        layout.addWidget(controls_box)
+        layout.addWidget(self.hist_chart_view, 1)
+        layout.addWidget(self.lbl_hist_info)
+
+        self.hist_group.setLayout(layout)
+        parent_layout.addWidget(self.hist_group)
+
+        # Signals: auto-update (like other charts)
+        self.hist_chk_forms_enable.toggled.connect(self._on_update_stat_histogram)
+        for cb in self.hist_gen_checkboxes:
+            cb.toggled.connect(self._on_update_stat_histogram)
+
+        self.hist_stat_combo.currentIndexChanged.connect(self._on_update_stat_histogram)
+        self.hist_type_filter_combo.currentIndexChanged.connect(
+            self._on_update_stat_histogram
+        )
+        self.hist_bins_combo.currentTextChanged.connect(self._on_update_stat_histogram)
+
+        # Initial render
+        self._on_update_stat_histogram()
 
     def _build_egg_group_chart_subtab(self) -> None:
         """Egg Groups subtab: filters + uses api.get_egg_chart."""
@@ -772,6 +839,80 @@ class PokedexWindow(QWidget):
             self.lbl_egg_chart_info.setText(f"Error: {e}")
             self.egg_chart_view.setChart(QChart())
 
+    def _on_update_stat_histogram(self) -> None:
+        if not hasattr(self, "hist_chart_view"):
+            return
+
+        if not hasattr(api, "get_stat_histogram"):
+            self.lbl_hist_info.setText("TODO: implement api.get_stat_histogram(...)")
+            self.hist_chart_view.setChart(QChart())
+            return
+
+        identifier = self.input_name.text().strip()  # must use top bar
+        if not identifier:
+            self.lbl_hist_info.setText(
+                "Type a Pokémon in the top search bar to highlight it."
+            )
+            self.hist_chart_view.setChart(QChart())
+            return
+
+        stat_key = (
+            self.hist_stat_combo.currentText().strip()
+            if hasattr(self, "hist_stat_combo")
+            else "HP"
+        )
+        type_filter = (
+            self.hist_type_filter_combo.currentData()
+            if hasattr(self, "hist_type_filter_combo")
+            else None
+        )
+        forms_enable = (
+            self.hist_chk_forms_enable.isChecked()
+            if hasattr(self, "hist_chk_forms_enable")
+            else False
+        )
+        generations_enable = [
+            cb.isChecked() for cb in getattr(self, "hist_gen_checkboxes", [])
+        ] or [True] * 9
+
+        bins_text = (
+            self.hist_bins_combo.currentText().strip()
+            if hasattr(self, "hist_bins_combo")
+            else "20"
+        )
+        try:
+            bins = int(bins_text)
+            if bins <= 0:
+                bins = 20
+        except Exception:
+            bins = 20
+
+        form = None
+        if hasattr(self, "form_combo") and self.form_combo.isEnabled():
+            ft = self.form_combo.currentText().strip()
+            form = ft or None
+
+        try:
+            chart_data = api.get_stat_histogram(
+                identifier=identifier,
+                stat_key=stat_key,
+                language_id=self.current_language_id,
+                type_filter=type_filter,
+                forms_enable=forms_enable,
+                generations_enable=generations_enable,
+                bins=bins,
+                form=form,
+            )
+            self._render_histogram_chart(
+                chart_view=self.hist_chart_view,
+                chart_data=chart_data,
+                title_fallback=f"Histogram - {stat_key}",
+                info_label=self.lbl_hist_info,
+            )
+        except Exception as e:
+            self.lbl_hist_info.setText(f"Error: {e}")
+            self.hist_chart_view.setChart(QChart())
+
     # -------------------------------------------------------------------------
     # Abilities subtab handlers
     # -------------------------------------------------------------------------
@@ -800,7 +941,6 @@ class PokedexWindow(QWidget):
             self._clear_ability_details()
             return
 
-        # Description
         if not hasattr(api, "get_ability_description"):
             self.lbl_ability_desc_stats.setText(
                 "Ability description API not available."
@@ -817,7 +957,6 @@ class PokedexWindow(QWidget):
             except Exception as e:
                 self.lbl_ability_desc_stats.setText(f"Error: {e}")
 
-        # Left: type chart
         if hasattr(api, "get_ability_type_chart"):
             try:
                 cd = api.get_ability_type_chart(
@@ -838,7 +977,6 @@ class PokedexWindow(QWidget):
             )
             self.ability_type_chart_view.setChart(QChart())
 
-        # Right: gen chart
         if hasattr(api, "get_ability_gen_chart"):
             try:
                 cd = api.get_ability_gen_chart(
@@ -1014,6 +1152,181 @@ class PokedexWindow(QWidget):
         else:
             info_label.setText(meta_text or "—")
 
+    def _render_histogram_chart(
+        self,
+        chart_view: QChartView,
+        chart_data,
+        title_fallback: str,
+        info_label: QLabel,
+    ) -> None:
+        labels = getattr(chart_data, "labels", []) or []
+        values = getattr(chart_data, "values", []) or []
+        total = getattr(chart_data, "total", None)
+        meta = getattr(chart_data, "meta", {}) or {}
+
+        series = QBarSeries()
+
+        base_set = QBarSet("Count")
+        for v in values:
+            try:
+                base_set.append(int(v))
+            except Exception:
+                base_set.append(0)
+        series.append(base_set)
+
+        selected_idx = None
+        try:
+            raw = meta.get("selected_bin_index") if isinstance(meta, dict) else None
+            if raw is not None and str(raw) != "None":
+                selected_idx = int(raw)
+        except Exception:
+            selected_idx = None
+
+        if selected_idx is not None and 0 <= selected_idx < len(values):
+            sel_set = QBarSet("Selected")
+            for i, v in enumerate(values):
+                sel_set.append(int(v) if i == selected_idx else 0)
+            series.append(sel_set)
+
+        chart = QChart()
+        chart.addSeries(series)
+        chart.setTitle(str(getattr(chart_data, "title", title_fallback)))
+
+        axis_x = QBarCategoryAxis()
+        axis_x.append([str(x) for x in labels])
+        axis_x.setLabelsAngle(-60)
+
+        axis_y = QValueAxis()
+        axis_y.setMin(0)
+        try:
+            ymax = max([int(x) for x in values]) if values else 1
+        except Exception:
+            ymax = 1
+        axis_y.setMax(max(1, int(ymax * 1.15)))
+
+        chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
+        chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
+        series.attachAxis(axis_x)
+        series.attachAxis(axis_y)
+
+        chart.legend().setVisible(selected_idx is not None)
+        chart_view.setChart(chart)
+
+        # ---- Info text (only the fields you asked for) ----
+        desc = ""
+        stat_key = ""
+        bins = ""
+        selected_identifier = ""
+        selected_value = ""
+        selected_rank = ""
+        rank_total = ""
+
+        if isinstance(meta, dict):
+            desc = str(meta.get("description", "")).strip()
+            stat_key = str(meta.get("stat_key", "")).strip()
+            bins = str(meta.get("bins", "")).strip()
+            selected_identifier = str(meta.get("selected_identifier", "")).strip()
+            selected_value = str(meta.get("selected_value", "")).strip()
+            selected_rank = str(meta.get("selected_rank", "")).strip()
+            rank_total = str(meta.get("rank_total", "")).strip()
+
+        if not stat_key:
+            stat_key = title_fallback.replace("Histogram -", "").strip() or "—"
+
+        # Resolve selected Pokémon name + dex number (Pokédex #)
+        selected_name = "—"
+        selected_dex = "—"
+
+        # Prefer current loaded Pokémon if it matches the input bar
+        try:
+            cur_text = self.input_name.text().strip()
+            if (
+                isinstance(self.current_data, dict)
+                and self.current_data
+                and cur_text
+                and selected_identifier
+                and cur_text.casefold() == selected_identifier.casefold()
+            ):
+                selected_name = str(self.current_data.get("name", "—"))
+                selected_dex = str(self.current_data.get("dex_number", "—"))
+        except Exception:
+            pass
+
+        if selected_name == "—" or selected_dex == "—":
+            # Try API directly (identifier might be name or dex number)
+            if selected_identifier:
+                try:
+                    p = api.get_pokemon(
+                        selected_identifier,
+                        form=(self.form_combo.currentText().strip() or None)
+                        if hasattr(self, "form_combo") and self.form_combo.isEnabled()
+                        else None,
+                        language_id=self.current_language_id,
+                    )
+                    if isinstance(p, dict):
+                        selected_name = str(p.get("name", selected_name))
+                        selected_dex = str(p.get("dex_number", selected_dex))
+                except Exception:
+                    # Fallback: if the user typed a localized name, map to species id then fetch
+                    try:
+                        lang = int(self.current_language_id)
+                        row = pokemon_species_names_df[
+                            (pokemon_species_names_df["local_language_id"] == lang)
+                            & (
+                                pokemon_species_names_df["name"]
+                                .astype(str)
+                                .str.casefold()
+                                == selected_identifier.casefold()
+                            )
+                        ]
+                        if not row.empty:
+                            dex_num = int(row["pokemon_species_id"].iloc[0])
+                            p = api.get_pokemon(
+                                dex_num,
+                                form=(self.form_combo.currentText().strip() or None)
+                                if hasattr(self, "form_combo")
+                                and self.form_combo.isEnabled()
+                                else None,
+                                language_id=self.current_language_id,
+                            )
+                            if isinstance(p, dict):
+                                selected_name = str(p.get("name", selected_name))
+                                selected_dex = str(p.get("dex_number", selected_dex))
+                    except Exception:
+                        pass
+
+        lines: list[str] = []
+        if total is not None:
+            lines.append(f"Total Pokémon counted: {total}")
+        if desc:
+            lines.append(f"Description: {desc}")
+        lines.append(f"Stat: {stat_key}")
+        if bins:
+            lines.append(f"Bins: {bins}")
+        else:
+            lines.append(f"Bins: {len(labels)}")
+
+        lines.append(f"Selected Pokémon: {selected_name}")
+        lines.append(f"Dex #: {selected_dex}")
+
+        if selected_value and selected_value != "None":
+            lines.append(f"{stat_key} value: {selected_value}")
+        else:
+            lines.append(f"{stat_key} value: —")
+
+        # Rank
+        if selected_rank and selected_rank != "None":
+            rt = (
+                rank_total
+                if (rank_total and rank_total != "None")
+                else (str(total) if total is not None else "—")
+            )
+            lines.append(f"Rank (within filters): {selected_rank} of {rt}")
+        else:
+            lines.append("Rank (within filters): —")
+
+        info_label.setText("\n".join(lines))
+
     # -------------------------------------------------------------------------
     # Language bar
     # -------------------------------------------------------------------------
@@ -1043,13 +1356,9 @@ class PokedexWindow(QWidget):
 
         self.current_language_id = lang_id
 
-        # Refresh top autocomplete
         self._init_pokemon_autocomplete()
-
-        # Refresh statistics catalogs (types + ability + items)
         self._init_statistics_catalogs()
 
-        # Re-render charts in the new language
         if hasattr(self, "type_chart_view"):
             self._on_update_type_chart_clicked()
         if hasattr(self, "gen_chart_view"):
@@ -1057,15 +1366,12 @@ class PokedexWindow(QWidget):
         if hasattr(self, "egg_chart_view"):
             self._on_update_egg_chart_clicked()
 
-        # Re-render ability charts/description if something is selected
         if hasattr(self, "ability_search") and self.ability_search.text().strip():
             self._on_update_ability_details()
 
-        # Re-render item details if something is selected/typed
         if hasattr(self, "item_search") and self.item_search.text().strip():
             self._on_update_item_details()
 
-        # Reload current Pokémon if any
         if self.current_identifier:
             current_form = self.form_combo.currentText().strip() or None
             self._load_pokemon_data(
@@ -1164,7 +1470,6 @@ class PokedexWindow(QWidget):
             self._bind_forms(identifier, data)
             self._bind_pokedex_flavor(identifier)
 
-            # Abilities + egg groups (Pokémon tab)
             self._bind_abilities(
                 data.get("abilities") or [],
                 data.get("is_hidden_ability") or [],
@@ -1174,6 +1479,9 @@ class PokedexWindow(QWidget):
             cries = data.get("cries") or []
             self.btn_play_cry.setEnabled(bool(cries))
             self.current_cry_index = 0
+
+            if hasattr(self, "hist_chart_view"):
+                self._on_update_stat_histogram()
 
         except Exception as e:
             QMessageBox.critical(self, "Error loading Pokémon", str(e))
@@ -1480,17 +1788,16 @@ class PokedexWindow(QWidget):
     # -------------------------------------------------------------------------
 
     def _init_statistics_catalogs(self):
-        # Fill type filters (ranking)
-        self._fill_type_filter_combo(self.rank_type_filter_combo)
-
-        # Fill chart type filter combos (must have userData as canonical identifier)
         if hasattr(self, "gen_type_filter_combo"):
             self._fill_chart_type_filter_combo(self.gen_type_filter_combo)
 
         if hasattr(self, "egg_type_filter_combo"):
             self._fill_chart_type_filter_combo(self.egg_type_filter_combo)
 
-        # Abilities completer
+        if hasattr(self, "hist_type_filter_combo"):
+            self._fill_chart_type_filter_combo(self.hist_type_filter_combo)
+            self._on_update_stat_histogram()
+
         ability_names = self._fetch_catalog_strings("get_all_abilities")
         self._ability_model = QStringListModel(
             sorted(set(ability_names), key=str.casefold), self
@@ -1510,7 +1817,6 @@ class PokedexWindow(QWidget):
             except Exception:
                 pass
 
-        # Items completer
         item_names = self._fetch_catalog_strings("get_all_items")
         self._item_model = QStringListModel(
             sorted(set(item_names), key=str.casefold), self
@@ -1530,7 +1836,6 @@ class PokedexWindow(QWidget):
             except Exception:
                 pass
 
-        # Initial fill triggers
         if hasattr(self, "gen_type_filter_combo"):
             self._on_update_gen_chart_clicked()
         if hasattr(self, "egg_type_filter_combo"):
@@ -1558,27 +1863,6 @@ class PokedexWindow(QWidget):
             else:
                 out.append(str(it))
         return out
-
-    def _fill_type_filter_combo(self, combo: QComboBox):
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItem("All types", userData=None)
-
-        if hasattr(api, "get_all_types"):
-            try:
-                items = api.get_all_types(language_id=self.current_language_id)
-                for it in items or []:
-                    if isinstance(it, list | tuple) and len(it) >= 2:
-                        key = str(it[0])
-                        label = str(it[1])
-                        combo.addItem(label, userData=key)
-                    else:
-                        s = str(it)
-                        combo.addItem(s, userData=s)
-            except Exception:
-                pass
-
-        combo.blockSignals(False)
 
     def _fill_chart_type_filter_combo(self, combo: QComboBox) -> None:
         """

@@ -2,10 +2,6 @@
 
 This project was started with [supopo-pai-cookiecutter-template](https://github.com/ClementPinard/supop-pai-cookiecuttter-template/tree/main)
 
-## How to run
-
-⚠️ Chose one of the two method below, and remove the other one.
-
 
 ### How to run
 
