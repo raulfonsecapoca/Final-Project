@@ -2117,8 +2117,15 @@ class PokedexWindow(QWidget):
 
 # ---- Entrypoint ---------------------------------------------------------------
 
-
+    
 def run():
+
+    """
+    Run.
+
+    Application entrypoint: create the Qt app and start the event loop.
+    """
+
     app = QApplication(sys.argv)
     w = PokedexWindow()
     w.show()
