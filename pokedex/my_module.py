@@ -86,6 +86,34 @@ class PokedexAPI:
     def get_pokemon(
         identifier: str | int, form: int | str | None = None, language_id: int = 9
     ) -> dict:
+        """
+        PokedexAPI.Get pokemon.
+
+        Retrieve a Pokémon record (species/form) and assemble UI-facing fields (types, base stats, evolution, forms, abilities, egg groups).
+
+        Reads from: ``ability_names_df``, ``egg_groups_prose_df``, ``pokemon_abilities_df``, ``pokemon_df``, ``pokemon_egg_groups_df``, ``pokemon_species_df``, ``pokemon_species_names_df``, ``pokemon_stats_df``, ``pokemon_types_df``.
+
+        Uses common pandas/numpy operations such as: ``tolist``, ``sort_values``, ``isin``.
+
+        Parameters
+        ----------
+        identifier: Any
+            Input parameter used to filter or select records.
+        form: Any
+            Input parameter used to filter or select records.
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        dict
+            Dictionary payload consumed by the Qt GUI.
+
+        Notes
+        -----
+        When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+        """
+        
         # identifier can be DexNum (25) or name ("pikachu")
 
         if isinstance(identifier, str):
@@ -222,6 +250,28 @@ class PokedexAPI:
         species_id: int,
         language_id: int,
     ) -> PokemonEvolNode:
+        
+        """
+        PokedexAPI.Build evolution tree.
+
+        Build a recursive evolution tree for a species, including evolution trigger metadata and localized node names.
+
+        Reads from: ``pokemon_evolution_df``, ``pokemon_species_df``, ``pokemon_species_names_df``.
+
+        Uses common pandas/numpy operations such as: ``tolist``, ``sort_values``, ``isin``.
+
+        Parameters
+        ----------
+        species_id: Any
+            Input parameter used to filter or select records.
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Notes
+        -----
+        When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+        """
+        
         # localized name
         name_row = pokemon_species_names_df[
             (pokemon_species_names_df["pokemon_species_id"] == species_id)
@@ -376,6 +426,25 @@ class PokedexAPI:
 
     @staticmethod
     def get_available_forms(identifier: str | int) -> list[str]:
+        """
+        PokedexAPI.Get available forms.
+
+        Return all available form identifiers for the given species.
+
+        Reads from: ``pokemon_df``, ``pokemon_species_df``.
+
+        Uses common pandas/numpy operations such as: ``tolist``, ``isin``.
+
+        Parameters
+        ----------
+        identifier: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        list
+            List of display strings used to populate UI controls.
+        """
         if isinstance(identifier, str):
             try:
                 dex = int(identifier)
@@ -402,6 +471,31 @@ class PokedexAPI:
 
     @staticmethod
     def get_pokedex_flavor(identifier: str | int, language_id: int = 9) -> dict:
+        """
+        PokedexAPI.Get pokedex flavor.
+
+        Return Pokédex flavor texts for the selected species in the requested language.
+
+        Reads from: ``pokemon_df``, ``pokemon_species_flavor_text_df``, ``versions_df``.
+
+        Uses common pandas/numpy operations such as: ``tolist``, ``isin``.
+
+        Parameters
+        ----------
+        identifier: Any
+            Input parameter used to filter or select records.
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        dict
+            Dictionary payload consumed by the Qt GUI.
+
+        Notes
+        -----
+        When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+        """
         if isinstance(identifier, str):
             try:
                 id = int(identifier)
@@ -438,6 +532,27 @@ class PokedexAPI:
     def get_ability_description(
         ability: str, is_hidden: bool, language_id: int = 9
     ) -> str:
+        """
+        PokedexAPI.Get ability description.
+
+        Return a localized ability description (flavor text), with English fallback and optional '(Hidden Ability)' prefix.
+
+        Reads from: ``ability_flavor_text_df``, ``ability_names_df``.
+
+        Parameters
+        ----------
+        ability: Any
+            Input parameter used to filter or select records.
+        is_hidden: Any
+            Input parameter used to filter or select records.
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Notes
+        -----
+        When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+        """
+        
         ability_str = str(ability).strip()
         if not ability_str:
             raise ValueError("Ability is empty")
@@ -492,6 +607,35 @@ class PokedexAPI:
         forms_enable: bool = False,
         generations_enable: list[bool] | None = None,
     ) -> ChartData:
+        
+        """
+        PokedexAPI.Get type chart.
+
+        Compute a type distribution chart under the given filters and return it as :class:`ChartData`.
+
+        Reads from: ``pokemon_df``, ``pokemon_species_df``, ``pokemon_types_df``, ``type_names_df``.
+
+        Uses common pandas/numpy operations such as: ``value_counts``, ``to_dict``, ``tolist``, ``isin``, ``unique``.
+
+        Parameters
+        ----------
+        language_id: Any
+            Input parameter used to filter or select records.
+        forms_enable: Any
+            Input parameter used to filter or select records.
+        generations_enable: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        ChartData
+            Aggregated chart payload consumed by the Qt GUI.
+
+        Notes
+        -----
+        When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+        """
+        
         if generations_enable is None:
             generations_enable = [True] * 9
 
@@ -554,6 +698,33 @@ class PokedexAPI:
     def get_gen_chart(language_id: int = 9,
         type_filter: str | None = None,
     ) -> ChartData:
+        
+        """
+        PokedexAPI.Get gen chart.
+
+        Compute a generation distribution chart under the given type filter and return it as :class:`ChartData`.
+
+        Reads from: ``generation_names_df``, ``pokemon_df``, ``pokemon_species_df``, ``pokemon_types_df``, ``types_df``.
+
+        Uses common pandas/numpy operations such as: ``value_counts``, ``to_dict``, ``tolist``, ``isin``, ``unique``.
+
+        Parameters
+        ----------
+        language_id: Any
+            Input parameter used to filter or select records.
+        type_filter: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        ChartData
+            Aggregated chart payload consumed by the Qt GUI.
+
+        Notes
+        -----
+        When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+        """
+        
         if type_filter is None:
             type_id_filter = None
         else:
@@ -613,6 +784,25 @@ class PokedexAPI:
 
     @staticmethod
     def get_all_types(language_id: int = 9) -> list[tuple[str, str]] | list[str]:
+        """
+        PokedexAPI.Get all types.
+
+        Return localized type names for the requested language (for populating UI controls).
+
+        Reads from: ``type_names_df``, ``types_df``.
+
+        Uses common pandas/numpy operations such as: ``tolist``, ``isin``.
+
+        Parameters
+        ----------
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        list
+            List of display strings used to populate UI controls.
+        """
         types_df_filtered = types_df[types_df["id"] <= 18]["id"].tolist()
 
         type_names_list = type_names_df[
@@ -624,6 +814,27 @@ class PokedexAPI:
 
     @staticmethod
     def get_all_abilities(language_id: int = 9) -> list[str] | list[tuple[str, str]]:
+
+        """
+        PokedexAPI.Get all abilities.
+
+        Return localized ability names for the requested language (for populating UI controls).
+
+        Reads from: ``ability_names_df``.
+
+        Uses common pandas/numpy operations such as: ``tolist``.
+
+        Parameters
+        ----------
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        list
+            List of display strings used to populate UI controls.
+        """
+
         ability_names_df_filtered = ability_names_df[
             ability_names_df["local_language_id"] == language_id
         ]["name"].tolist()
@@ -631,6 +842,26 @@ class PokedexAPI:
 
     @staticmethod
     def get_all_egg_groups(language_id: int = 9) -> list[str] | list[tuple[str, str]]:
+        """
+        PokedexAPI.Get all egg groups.
+
+        Return localized egg group names for the requested language (for autocompletion).
+
+        Reads from: ``egg_groups_prose_df``.
+
+        Uses common pandas/numpy operations such as: ``tolist``.
+
+        Parameters
+        ----------
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        list
+            List of display strings used to populate UI controls.
+        """
+
         egg_groups_prose_df_filtered = egg_groups_prose_df[
             egg_groups_prose_df["local_language_id"] == language_id
         ]["name"].tolist()
@@ -638,6 +869,26 @@ class PokedexAPI:
 
     @staticmethod
     def get_all_items(language_id: int = 9) -> list[str] | list[tuple[str, str]]:
+        """
+        PokedexAPI.Get all items.
+
+        Return localized item names for the requested language (restricted to items with flavor text).
+
+        Reads from: ``item_flavor_text_df``, ``item_names_df``.
+
+        Uses common pandas/numpy operations such as: ``tolist``, ``isin``, ``unique``.
+
+        Parameters
+        ----------
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        list
+            List of display strings used to populate UI controls.
+        """
+
         all_item_ids = item_flavor_text_df["item_id"].unique().tolist()
 
         item_names_df_filtered = item_names_df[
@@ -655,6 +906,35 @@ class PokedexAPI:
         type_filter: str | None = None,
         generations_enable: list[bool] | None = None,
     ) -> ChartData:
+        
+        """
+        PokedexAPI.Get egg chart.
+
+        Compute an egg group distribution chart under the given filters and return it as :class:`ChartData`.
+
+        Reads from: ``egg_df``, ``egg_groups_prose_df``, ``pokemon_df``, ``pokemon_egg_groups_df``, ``pokemon_species_df``, ``pokemon_types_df``, ``types_df``.
+
+        Uses common pandas/numpy operations such as: ``value_counts``, ``tolist``, ``isin``, ``unique``, ``copy``.
+
+        Parameters
+        ----------
+        language_id: Any
+            Input parameter used to filter or select records.
+        type_filter: Any
+            Input parameter used to filter or select records.
+        generations_enable: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        ChartData
+            Aggregated chart payload consumed by the Qt GUI.
+
+        Notes
+        -----
+        When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+        """
+       
         if generations_enable is None:
             generations_enable = [True] * 9
 
@@ -725,6 +1005,29 @@ class PokedexAPI:
     def get_ability_type_chart( ability: str,
         language_id: int = 9,
     ) -> ChartData:
+        
+        """
+        PokedexAPI.Get ability type chart.
+
+        Compute a type distribution chart restricted to Pokémon that have the given ability.
+
+        Reads from: ``ability_names_df``, ``pokemon_abilities_df``, ``pokemon_types_df``, ``type_names_df``.
+
+        Uses common pandas/numpy operations such as: ``value_counts``, ``to_dict``, ``tolist``, ``isin``, ``unique``.
+
+        Parameters
+        ----------
+        ability: Any
+            Input parameter used to filter or select records.
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        ChartData
+            Aggregated chart payload consumed by the Qt GUI.
+        """
+        
         ability_str = str(ability).strip()
         if not ability_str:
             raise ValueError("Ability is empty")
@@ -790,6 +1093,29 @@ class PokedexAPI:
     def get_ability_gen_chart( ability: str,
         language_id: int = 9,
     ) -> ChartData:
+        
+        """
+        PokedexAPI.Get ability gen chart.
+
+        Compute a generation distribution chart restricted to Pokémon that have the given ability.
+
+        Reads from: ``ability_names_df``, ``generation_names_df``, ``pokemon_abilities_df``, ``pokemon_df``, ``pokemon_species_df``.
+
+        Uses common pandas/numpy operations such as: ``value_counts``, ``to_dict``, ``tolist``, ``isin``, ``unique``.
+
+        Parameters
+        ----------
+        ability: Any
+            Input parameter used to filter or select records.
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        ChartData
+            Aggregated chart payload consumed by the Qt GUI.
+        """
+        
         ability_str = str(ability).strip()
         if not ability_str:
             raise ValueError("Ability is empty")
@@ -856,6 +1182,30 @@ class PokedexAPI:
 
     @staticmethod
     def get_item(item: str, language_id: int = 9) -> dict:
+
+        """
+        PokedexAPI.Get item.
+
+        Retrieve a single item (localized name, flavor text, sprite path) with English fallback.
+
+        Reads from: ``item_flavor_text_df``, ``item_names_df``, ``items_df``.
+
+        Parameters
+        ----------
+        item: Any
+            Input parameter used to filter or select records.
+        language_id: Any
+            Input parameter used to filter or select records.
+
+        Returns
+        -------
+        dict
+            Dictionary payload consumed by the Qt GUI.
+
+        Notes
+        -----
+        When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+        """
         item_str = str(item).strip()
 
         if not item_str:
@@ -934,6 +1284,7 @@ class PokedexAPI:
         | None = None,  # e.g. (0, 255) if you want fixed range
         form: int | str | None = None,  # optional, same idea as get_pokemon
     ) -> ChartData:
+        
         """
         Build a histogram of a given base stat over the pokemons selected by filters,
         and include metadata to highlight the selected pokemon.
@@ -942,6 +1293,8 @@ class PokedexAPI:
         - selected_rank: 1 means best/highest value
         - rank_total: number of pokemons considered
         - selected_value: absolute stat value
+
+        Reads from: ``pokemon_df``, ``pokemon_species_df``, ``pokemon_stats_df``, ``pokemon_types_df``, ``stat_values_df``, ``stats_df``,
 
         Returns:
             ChartData: labels are bin ranges, values are counts, meta includes selected marker + rank info.
@@ -1183,10 +1536,34 @@ class PokedexAPI:
 
     @staticmethod
     def _is_nan(x) -> bool:
+        """
+        PokedexAPI.Is nan.
+
+        Return ``True`` if the value should be treated as missing (None or NaN).
+
+        Uses common pandas/numpy operations such as: ``isin``.
+
+        Parameters
+        ----------
+        x: Any
+            Input parameter used to filter or select records.
+        """
         return x is None or (isinstance(x, float) and math.isnan(x))
 
     @staticmethod
     def _get_item_identifier(item_id: int) -> str | None:
+        """
+        PokedexAPI.Get item identifier.
+
+        Return the canonical item identifier string for a numeric item id.
+
+        Reads from: ``items_df``.
+
+        Parameters
+        ----------
+        item_id: Any
+            Input parameter used to filter or select records.
+        """
         row = items_df[items_df["id"] == item_id]["identifier"]
         if row.empty:
             return None
