@@ -488,8 +488,7 @@ class PokedexAPI:
         return text
 
     @staticmethod
-    def get_type_chart(
-        language_id: int = 9,
+    def get_type_chart(language_id: int = 9,
         forms_enable: bool = False,
         generations_enable: list[bool] | None = None,
     ) -> ChartData:
@@ -552,8 +551,7 @@ class PokedexAPI:
         )
 
     @staticmethod
-    def get_gen_chart(
-        language_id: int = 9,
+    def get_gen_chart(language_id: int = 9,
         type_filter: str | None = None,
     ) -> ChartData:
         if type_filter is None:
@@ -653,8 +651,7 @@ class PokedexAPI:
         return item_names_filtered
 
     @staticmethod
-    def get_egg_chart(
-        language_id: int = 9,
+    def get_egg_chart( language_id: int = 9,
         type_filter: str | None = None,
         generations_enable: list[bool] | None = None,
     ) -> ChartData:
@@ -725,8 +722,7 @@ class PokedexAPI:
         )
 
     @staticmethod
-    def get_ability_type_chart(
-        ability: str,
+    def get_ability_type_chart( ability: str,
         language_id: int = 9,
     ) -> ChartData:
         ability_str = str(ability).strip()
@@ -791,8 +787,7 @@ class PokedexAPI:
         )
 
     @staticmethod
-    def get_ability_gen_chart(
-        ability: str,
+    def get_ability_gen_chart( ability: str,
         language_id: int = 9,
     ) -> ChartData:
         ability_str = str(ability).strip()
@@ -1199,6 +1194,20 @@ class PokedexAPI:
 
     @staticmethod
     def _get_item_localized_name(item_id: int, language_id: int) -> str | None:
+        """
+        PokedexAPI.Get item localized name.
+
+        Return a localized item name for an item id, with English fallback.
+
+        Reads from: ``item_names_df``.
+
+        Parameters
+        ----------
+        item_id: Any
+            Input parameter used to filter or select records.
+        language_id: Any
+            Input parameter used to filter or select records.
+        """
         s = item_names_df[
             (item_names_df["item_id"] == item_id)
             & (item_names_df["local_language_id"] == language_id)
