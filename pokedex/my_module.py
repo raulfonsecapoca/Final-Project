@@ -2,6 +2,9 @@
 sphinx and the right syntaxe for docstrings.
 """
 
+from __future__ import annotations
+
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -53,6 +56,17 @@ class ChartData:
     values: list[int]
     total: int
     meta: dict[str, str]
+
+
+@dataclass(frozen=True)
+class PokemonEvolNode:
+    dex_no: int
+    name: str
+    image: str
+    evol_trigger_id: int
+    evol_trigger_value: str = "NaN"
+    evol_image: str = "NaN"
+    evolutions: tuple[PokemonEvolNode, ...] = ()
 
 
 class PokedexAPI:
@@ -107,6 +121,7 @@ class PokedexAPI:
             ["stat_id", "base_stat"]
         ]
 
+        # Evolution chain
         evolution_chain_id = pokemon_species_df[
             pokemon_species_df["id"] == pokemon_dexNum
         ]["evolution_chain_id"].values[0]
@@ -114,55 +129,16 @@ class PokedexAPI:
             pokemon_species_df["evolution_chain_id"] == evolution_chain_id
         ]
 
-        # sort evolution chain by evolution order
         start_row = (
             evolution_chain[evolution_chain["evolves_from_species_id"].isna()]
             .sort_values("id")
             .iloc[0]
         )
-        current_id = start_row["id"]
 
-        order = [current_id]
-
-        current_ids = [current_id]
-
-        for current_id in current_ids:
-            next_rows = evolution_chain[
-                evolution_chain["evolves_from_species_id"] == current_id
-            ].sort_values("id")
-            if next_rows.empty:
-                continue
-
-            for k in range(len(next_rows)):
-                order.append(next_rows.iloc[k]["id"])
-            current_ids.extend(next_rows["id"].tolist())
-
-        evolution_chain_sorted = (
-            evolution_chain.set_index("id").loc[order].reset_index()
+        evolution_tree = PokedexAPI.build_evolution_tree(
+            species_id=int(start_row["id"]),
+            language_id=language_id,
         )
-        ###
-
-        evolution_chain_id_list = evolution_chain_sorted["id"].tolist()
-
-        pokemon_evolution_line_list = []
-        for pid in evolution_chain_id_list:
-            pok = pokemon_df[pokemon_df["id"] == pid]
-            if not pok.empty:
-                name = pokemon_species_names_df[
-                    (pokemon_species_names_df["pokemon_species_id"] == pid)
-                ]
-                name = name[name["local_language_id"] == language_id]
-                if not name.empty:
-                    name = name["name"].values[0]
-                else:
-                    name = pok["identifier"].values[0]
-                pokemon_evolution_line_list.append(
-                    {
-                        "name": name,
-                        "image": f"data/sprites/sprites/pokemon/{int(pid)}.png",
-                        "dex_number": pok["species_id"].values[0],
-                    }
-                )
 
         pokemon_forms_list = pokemon_df[pokemon_df["species_id"] == pokemon_dexNum][
             "identifier"
@@ -234,12 +210,169 @@ class PokedexAPI:
                 "SpD": stats_list[stats_list["stat_id"] == 5]["base_stat"].values[0],
                 "Spe": stats_list[stats_list["stat_id"] == 6]["base_stat"].values[0],
             },
-            "evolution_line": pokemon_evolution_line_list,
+            "evolution_line": evolution_tree,
             "forms": pokemon_forms_list,
             "abilities": ability_names,
             "is_hidden_ability": is_hidden_ability_list,
             "egg_groups": egg_group_names,
         }
+
+    @staticmethod
+    def build_evolution_tree(
+        species_id: int,
+        language_id: int,
+    ) -> PokemonEvolNode:
+        # localized name
+        name_row = pokemon_species_names_df[
+            (pokemon_species_names_df["pokemon_species_id"] == species_id)
+            & (pokemon_species_names_df["local_language_id"] == language_id)
+        ]
+        if not name_row.empty:
+            name = str(name_row.iloc[0]["name"])
+        else:
+            sp = pokemon_species_df[pokemon_species_df["id"] == species_id].iloc[0]
+            name = str(sp.get("identifier", str(species_id)))
+
+        image = f"data/sprites/sprites/pokemon/{int(species_id)}.png"
+
+        # --- evolution meta for THIS species (how you reach THIS node from its parent)
+        evo_row = pokemon_evolution_df[
+            pokemon_evolution_df["evolved_species_id"] == species_id
+        ]
+        if evo_row.empty:
+            evol_trigger_id = 0
+            evol_trigger_value = "NaN"
+            evol_image = "NaN"
+        else:
+            r = evo_row.iloc[0]
+            evol_trigger_id = (
+                int(r["evolution_trigger_id"])
+                if not PokedexAPI._is_nan(r["evolution_trigger_id"])
+                else 0
+            )
+
+            parts: list[str] = []
+            evol_image = "NaN"
+
+            # Level
+            if "minimum_level" in r and not PokedexAPI._is_nan(r["minimum_level"]):
+                parts.append(f"Lv. {int(r['minimum_level'])}")
+
+            # Happiness / Beauty / Affection
+            if "minimum_happiness" in r and not PokedexAPI._is_nan(
+                r["minimum_happiness"]
+            ):
+                parts.append(f"Happiness {int(r['minimum_happiness'])}")
+
+            if "minimum_beauty" in r and not PokedexAPI._is_nan(r["minimum_beauty"]):
+                parts.append(f"Beauty {int(r['minimum_beauty'])}")
+
+            if "minimum_affection" in r and not PokedexAPI._is_nan(
+                r["minimum_affection"]
+            ):
+                parts.append(f"Affection {int(r['minimum_affection'])}")
+
+            # Time of day ("" means none)
+            if (
+                "time_of_day" in r
+                and isinstance(r["time_of_day"], str)
+                and r["time_of_day"].strip()
+            ):
+                parts.append(r["time_of_day"].strip())
+
+            # Item used to trigger evolution
+            trigger_item_id = None
+            if "trigger_item_id" in r and not PokedexAPI._is_nan(r["trigger_item_id"]):
+                trigger_item_id = int(r["trigger_item_id"])
+
+            held_item_id = None
+            if "held_item_id" in r and not PokedexAPI._is_nan(r["held_item_id"]):
+                held_item_id = int(r["held_item_id"])
+
+            if trigger_item_id is not None:
+                item_name = PokedexAPI._get_item_localized_name(
+                    trigger_item_id, language_id
+                )
+                if item_name is not None:
+                    parts.append(item_name)
+
+                item_identifier = PokedexAPI._get_item_identifier(trigger_item_id)
+                if item_identifier is not None:
+                    evol_image = f"data/sprites/sprites/items/{item_identifier}.png"
+
+            elif held_item_id is not None:
+                item_name = PokedexAPI._get_item_localized_name(
+                    held_item_id, language_id
+                )
+                if item_name is not None:
+                    parts.append(f"Held: {item_name}")
+
+                item_identifier = PokedexAPI._get_item_identifier(held_item_id)
+                if item_identifier is not None:
+                    evol_image = f"data/sprites/sprites/items/{item_identifier}.png"
+
+            # Known-move / location / other fields (only if they exist in your csv)
+            if "known_move_id" in r and not PokedexAPI._is_nan(r["known_move_id"]):
+                parts.append(f"Known move {int(r['known_move_id'])}")
+
+            if "known_move_type_id" in r and not PokedexAPI._is_nan(
+                r["known_move_type_id"]
+            ):
+                parts.append(f"Move type {int(r['known_move_type_id'])}")
+
+            if "location_id" in r and not PokedexAPI._is_nan(r["location_id"]):
+                parts.append(f"Location {int(r['location_id'])}")
+
+            if "gender_id" in r and not PokedexAPI._is_nan(r["gender_id"]):
+                parts.append(f"Gender {int(r['gender_id'])}")
+
+            if "min_level" in r and not PokedexAPI._is_nan(r["min_level"]):
+                # just in case your csv uses a different column name
+                parts.append(f"Lv. {int(r['min_level'])}")
+
+            # Boolean-ish flags if present
+            if (
+                "needs_overworld_rain" in r
+                and not PokedexAPI._is_nan(r["needs_overworld_rain"])
+                and bool(r["needs_overworld_rain"])
+            ):
+                parts.append("Rain")
+
+            if (
+                "turn_upside_down" in r
+                and not PokedexAPI._is_nan(r["turn_upside_down"])
+                and bool(r["turn_upside_down"])
+            ):
+                parts.append("Upside down")
+
+            evol_trigger_value = ", ".join(parts) if parts else "NaN"
+
+        # children species
+        children = (
+            pokemon_species_df[
+                pokemon_species_df["evolves_from_species_id"] == species_id
+            ]
+            .sort_values("id")["id"]
+            .tolist()
+        )
+
+        child_nodes = tuple(
+            PokedexAPI.build_evolution_tree(
+                species_id=int(child_id),
+                language_id=language_id,
+            )
+            for child_id in children
+        )
+
+        return PokemonEvolNode(
+            dex_no=int(species_id),
+            name=name,
+            image=image,
+            evol_trigger_id=evol_trigger_id,
+            evol_trigger_value=evol_trigger_value,
+            evol_image=evol_image,
+            evolutions=child_nodes,
+        )
 
     @staticmethod
     def get_available_forms(identifier: str | int) -> list[str]:
@@ -1054,20 +1187,27 @@ class PokedexAPI:
         )
 
     @staticmethod
-    def get_stat_rank(
-        identifier: str,
-        stat_key: str,  # "HP","Atk","Def","SpA","SpD","Spe"
-        language_id: int = 9,
-        type_filter: str | None = None,  # type id or type name (your choice)
-    ) -> dict:
-        return {"rank": 123, "total": 1025, "value": 112}
+    def _is_nan(x) -> bool:
+        return x is None or (isinstance(x, float) and math.isnan(x))
 
     @staticmethod
-    def count_pokemon_with_ability(ability: str, type_filter: str | None = None) -> int:
-        return 42
+    def _get_item_identifier(item_id: int) -> str | None:
+        row = items_df[items_df["id"] == item_id]["identifier"]
+        if row.empty:
+            return None
+        return str(row.iloc[0])
 
     @staticmethod
-    def count_pokemon_in_egg_group(
-        egg_group: str, type_filter: str | None = None
-    ) -> int:
-        return 42
+    def _get_item_localized_name(item_id: int, language_id: int) -> str | None:
+        s = item_names_df[
+            (item_names_df["item_id"] == item_id)
+            & (item_names_df["local_language_id"] == language_id)
+        ]["name"]
+        if s.empty:
+            s = item_names_df[
+                (item_names_df["item_id"] == item_id)
+                & (item_names_df["local_language_id"] == 9)
+            ]["name"]
+        if s.empty:
+            return None
+        return str(s.iloc[0])

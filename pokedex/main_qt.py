@@ -7,7 +7,7 @@
 # - get_pokemon(identifier: str, form: str | None = None, language_id: int = 9) -> dict
 #   - returning keys:
 #     - name, dex_number, image, cries (list[str]), types (list[int|str]),
-#     - base_stats (dict[str,int]), evolution_line (list[dict{name,image,dex_number}]),
+#     - base_stats (dict[str,int]), evolution_line (list[dict{name,image,dex_number}] OR PokemonEvolNode-like),
 #     - forms (list[str]|optional)
 #   - NEW keys recommended:
 #     - abilities (list[str]|optional)
@@ -81,6 +81,10 @@ pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
 pokemon_species_names_df = pd.read_csv(
     "data/csv/pokemon_species_names.csv"
 )  # localized names
+
+# ---- CSVs for item-name resolution from item sprite identifier (for evo click) ----
+items_df = pd.read_csv("data/csv/items.csv")
+item_names_df = pd.read_csv("data/csv/item_names.csv")
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # Final-Project/
 TYPE_ICON_DIR = (
@@ -263,10 +267,24 @@ class PokedexWindow(QWidget):
         self._init_statistics_catalogs()
 
     # -------------------------------------------------------------------------
-    # Build: Pokédex tab
+    # Build: Pokédex tab (NOW: internal subtabs Pokémon + Items)
     # -------------------------------------------------------------------------
 
     def _build_pokedex_tab(self):
+        self.pokedex_tabs = QTabWidget()
+        self.pokedex_pokemon_tab = QWidget()
+        self.pokedex_items_tab = QWidget()
+
+        self.pokedex_tabs.addTab(self.pokedex_pokemon_tab, "Pokémon")
+        self.pokedex_tabs.addTab(self.pokedex_items_tab, "Items")
+
+        layout = QVBoxLayout(self.tab_pokedex)
+        layout.addWidget(self.pokedex_tabs, 1)
+
+        self._build_pokedex_pokemon_subtab()
+        self._build_pokedex_items_subtab()
+
+    def _build_pokedex_pokemon_subtab(self):
         # Left column
         self.lbl_sprite = QLabel()
         self.lbl_sprite.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -392,11 +410,61 @@ class PokedexWindow(QWidget):
         main_row.addLayout(left_col, 1)
         main_row.addLayout(right_col, 2)
 
-        tab_layout = QVBoxLayout(self.tab_pokedex)
+        tab_layout = QVBoxLayout(self.pokedex_pokemon_tab)
         tab_layout.addLayout(main_row, 1)
 
+    def _build_pokedex_items_subtab(self) -> None:
+        """Pokédex > Items subtab: search (autocomplete) + show name, flavor text, and image."""
+        root = QVBoxLayout(self.pokedex_items_tab)
+
+        box = QGroupBox("Item Details")
+        layout = QVBoxLayout(box)
+
+        # Search
+        self.item_search = QLineEdit()
+        self.item_search.setPlaceholderText("Search item (type to autocomplete)")
+        layout.addWidget(QLabel("Item:"))
+        layout.addWidget(self.item_search)
+
+        # Content row: image + text
+        content_row = QHBoxLayout()
+
+        self.lbl_item_image = QLabel()
+        self.lbl_item_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_item_image.setFrameShape(QFrame.Shape.Panel)
+        self.lbl_item_image.setFrameShadow(QFrame.Shadow.Sunken)
+        self.lbl_item_image.setMinimumSize(160, 160)
+
+        text_col = QVBoxLayout()
+
+        self.lbl_item_name = QLabel("—")
+        self.lbl_item_name.setWordWrap(True)
+
+        self.lbl_item_desc = QLabel("—")
+        self.lbl_item_desc.setWordWrap(True)
+        self.lbl_item_desc.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.lbl_item_desc.setMinimumHeight(160)
+
+        text_col.addWidget(QLabel("Name:"))
+        text_col.addWidget(self.lbl_item_name)
+        text_col.addSpacing(8)
+        text_col.addWidget(QLabel("Description:"))
+        text_col.addWidget(self.lbl_item_desc, 1)
+
+        content_row.addWidget(self.lbl_item_image, 0)
+        content_row.addLayout(text_col, 1)
+
+        layout.addLayout(content_row, 1)
+        root.addWidget(box, 1)
+
+        # Signals
+        self.item_search.returnPressed.connect(self._on_update_item_details)
+
+        # Initial blank
+        self._clear_item_details()
+
     # -------------------------------------------------------------------------
-    # Build: Statistics tab + subtabs
+    # Build: Statistics tab + subtabs (Items REMOVED)
     # -------------------------------------------------------------------------
 
     def _build_statistics_tab(self):
@@ -406,13 +474,11 @@ class PokedexWindow(QWidget):
         self.stats_tab_pokemon = QWidget()
         self.stats_tab_egg = QWidget()
         self.stats_tab_abilities = QWidget()
-        self.stats_tab_items = QWidget()
 
         self.stats_tabs.addTab(self.stats_tab_general, "General Statistics")
         self.stats_tabs.addTab(self.stats_tab_pokemon, "Pokemon")
         self.stats_tabs.addTab(self.stats_tab_egg, "Egg Groups")
         self.stats_tabs.addTab(self.stats_tab_abilities, "Abilities")
-        self.stats_tabs.addTab(self.stats_tab_items, "Items")
 
         # ---------------- Subtab: General Statistics ----------------
         self._build_general_statistics_subtab()
@@ -427,9 +493,6 @@ class PokedexWindow(QWidget):
 
         # ---------------- Subtab: Abilities (description + 2 charts) ----------------
         self._build_abilities_subtab()
-
-        # ---------------- Subtab: Items (search + details) ----------------
-        self._build_items_subtab()
 
         # Assemble Statistics tab
         tab_layout = QVBoxLayout(self.tab_stats)
@@ -708,56 +771,6 @@ class PokedexWindow(QWidget):
         # Initial blank
         self._clear_ability_details()
 
-    def _build_items_subtab(self) -> None:
-        """Items subtab: search (autocomplete) + show name, flavor text, and image."""
-        root = QVBoxLayout(self.stats_tab_items)
-
-        box = QGroupBox("Item Details")
-        layout = QVBoxLayout(box)
-
-        # Search
-        self.item_search = QLineEdit()
-        self.item_search.setPlaceholderText("Search item (type to autocomplete)")
-        layout.addWidget(QLabel("Item:"))
-        layout.addWidget(self.item_search)
-
-        # Content row: image + text
-        content_row = QHBoxLayout()
-
-        self.lbl_item_image = QLabel()
-        self.lbl_item_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_item_image.setFrameShape(QFrame.Shape.Panel)
-        self.lbl_item_image.setFrameShadow(QFrame.Shadow.Sunken)
-        self.lbl_item_image.setMinimumSize(160, 160)
-
-        text_col = QVBoxLayout()
-
-        self.lbl_item_name = QLabel("—")
-        self.lbl_item_name.setWordWrap(True)
-
-        self.lbl_item_desc = QLabel("—")
-        self.lbl_item_desc.setWordWrap(True)
-        self.lbl_item_desc.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.lbl_item_desc.setMinimumHeight(160)
-
-        text_col.addWidget(QLabel("Name:"))
-        text_col.addWidget(self.lbl_item_name)
-        text_col.addSpacing(8)
-        text_col.addWidget(QLabel("Description:"))
-        text_col.addWidget(self.lbl_item_desc, 1)
-
-        content_row.addWidget(self.lbl_item_image, 0)
-        content_row.addLayout(text_col, 1)
-
-        layout.addLayout(content_row, 1)
-        root.addWidget(box, 1)
-
-        # Signals
-        self.item_search.returnPressed.connect(self._on_update_item_details)
-
-        # Initial blank
-        self._clear_item_details()
-
     # -------------------------------------------------------------------------
     # Charts handlers
     # -------------------------------------------------------------------------
@@ -998,7 +1011,7 @@ class PokedexWindow(QWidget):
             self.ability_gen_chart_view.setChart(QChart())
 
     # -------------------------------------------------------------------------
-    # Items subtab handlers
+    # Items (NOW: Pokédex > Items)
     # -------------------------------------------------------------------------
 
     def _clear_item_details(self) -> None:
@@ -1539,56 +1552,251 @@ class PokedexWindow(QWidget):
             val = stats.get(key) or stats.get(key.lower()) or "—"
             lbl.setText(str(val))
 
-    def _bind_evolution_line(self, evo_list: list[dict]):
+    # ----------------- Evolution display (tree) + click-to-view + item click-to-items -----------------
+
+    def _go_to_pokemon(self, identifier: str | int) -> None:
+        ident = str(identifier).strip()
+        if not ident:
+            return
+        self.input_name.setText(ident)
+        self.current_identifier = ident
+        self._load_pokemon_data(identifier=ident, form=None)
+
+    def _go_to_item_by_name(self, item_name: str) -> None:
+        name = str(item_name).strip()
+        if not name:
+            return
+        # go to main Pokédex tab, then its Items subtab
+        self.tabs.setCurrentWidget(self.tab_pokedex)
+        if hasattr(self, "pokedex_tabs"):
+            self.pokedex_tabs.setCurrentWidget(self.pokedex_items_tab)
+
+        if hasattr(self, "item_search"):
+            self.item_search.setText(name)
+            self._on_update_item_details()
+
+    def _resolve_item_name_from_sprite(self, item_sprite_path: str) -> str | None:
+        """
+        item_sprite_path: data/sprites/sprites/items/{identifier}.png
+        Resolve identifier -> item_id -> localized name (fallback to English).
+        """
+        try:
+            if not item_sprite_path:
+                return None
+
+            ident = Path(str(item_sprite_path)).stem  # e.g. "thunder-stone"
+            if not ident:
+                return None
+
+            row = items_df[items_df["identifier"].astype(str) == ident]
+            if row.empty:
+                return None
+            item_id = int(row.iloc[0]["id"])
+
+            name_row = item_names_df[
+                (item_names_df["item_id"] == item_id)
+                & (item_names_df["local_language_id"] == int(self.current_language_id))
+            ]
+            if not name_row.empty:
+                return str(name_row.iloc[0]["name"])
+
+            name_row = item_names_df[
+                (item_names_df["item_id"] == item_id)
+                & (item_names_df["local_language_id"] == 9)
+            ]
+            if not name_row.empty:
+                return str(name_row.iloc[0]["name"])
+
+            return None
+        except Exception:
+            return None
+
+    def _bind_evolution_line(self, evo_data):
         while self.evo_row.count() > 0:
             item = self.evo_row.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
 
-        for node in evo_list:
-            w = self._make_evo_card(
-                name=node.get("name", "?"),
-                image=node.get("image"),
-                dex_number=node.get("dex_number"),
-            )
-            self.evo_row.addWidget(w)
+        if not evo_data:
+            self.evo_row.addWidget(QLabel("—"))
+            self.evo_row.addStretch()
+            return
 
+        # Legacy support: list[dict] (old API)
+        if isinstance(evo_data, list):
+            for node in evo_data:
+                w = self._make_evo_pokemon_card(
+                    name=str(node.get("name", "?")),
+                    image=str(node.get("image", "")) if node.get("image") else None,
+                    dex_no=node.get("dex_number", None),
+                )
+                self.evo_row.addWidget(w)
+            self.evo_row.addStretch()
+            return
+
+        # New API: PokemonEvolNode-like object
+        root_widget = self._make_evo_subtree_widget(evo_data)
+        self.evo_row.addWidget(root_widget)
         self.evo_row.addStretch()
 
-    def _make_evo_card(
-        self, name: str, image: str | None, dex_number: int | None
+    def _make_evo_pokemon_card(
+        self, name: str, image: str | None, dex_no: int | None
     ) -> QWidget:
-        box = QVBoxLayout()
-        img = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        cont = QWidget()
+        box = QVBoxLayout(cont)
+        box.setContentsMargins(6, 6, 6, 6)
+        box.setSpacing(6)
+
+        btn_img = QToolButton()
+        btn_img.setAutoRaise(True)
+        btn_img.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_img.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        btn_img.setIconSize(QSize(96, 96))
+
         pm = _load_pixmap(image, QSize(96, 96)) if image else QPixmap()
-        img.setPixmap(pm) if not pm.isNull() else img.setText("—")
+        if pm.isNull():
+            btn_img.setText("—")
+        else:
+            btn_img.setIcon(QIcon(pm))
 
-        nm = QLabel(name, alignment=Qt.AlignmentFlag.AlignCenter)
-        nm.setWordWrap(True)
+        if dex_no is not None:
+            btn_img.clicked.connect(
+                lambda _=False, d=int(dex_no): self._go_to_pokemon(d)
+            )
+        else:
+            btn_img.clicked.connect(lambda _=False, n=name: self._go_to_pokemon(n))
 
-        dx = QLabel(
-            f"Dex #: {dex_number}" if dex_number is not None else "Dex #: —",
+        lbl_name = QLabel(name, alignment=Qt.AlignmentFlag.AlignCenter)
+        lbl_name.setWordWrap(True)
+
+        lbl_dex = QLabel(
+            f"Dex #: {dex_no}" if dex_no is not None else "Dex #: —",
             alignment=Qt.AlignmentFlag.AlignCenter,
         )
 
-        btn = QPushButton("View")
-        if dex_number is not None:
-            btn.clicked.connect(
-                lambda: self._load_pokemon_data(identifier=str(dex_number), form=None)
+        box.addWidget(btn_img, alignment=Qt.AlignmentFlag.AlignCenter)
+        box.addWidget(lbl_name)
+        box.addWidget(lbl_dex)
+
+        cont.setMinimumWidth(130)
+        return cont
+
+    def _make_evo_transition_widget(
+        self,
+        trigger_value: str | None,
+        item_image: str | None,
+    ) -> QWidget:
+        cont = QWidget()
+        box = QVBoxLayout(cont)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(4)
+
+        lbl_arrow = QLabel("<b>→</b>", alignment=Qt.AlignmentFlag.AlignCenter)
+
+        tv = (trigger_value or "").strip()
+        show_item = bool(item_image) and str(item_image) != "NaN"
+
+        # Clickable item icon (when exists) => go to Pokédex > Items with item selected
+        item_btn: QToolButton | None = None
+        if show_item:
+            item_btn = QToolButton()
+            item_btn.setAutoRaise(True)
+            item_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            item_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            item_btn.setIconSize(QSize(36, 36))
+
+            pm = _load_pixmap(str(item_image), QSize(36, 36))
+            if not pm.isNull():
+                item_btn.setIcon(QIcon(pm))
+            else:
+                item_btn.setText("—")
+
+            # Prefer trigger_value if it looks like a name; fallback to resolving from sprite identifier
+            item_name = tv if tv and tv != "NaN" else None
+            if not item_name:
+                item_name = self._resolve_item_name_from_sprite(str(item_image))
+
+            if item_name:
+                item_btn.clicked.connect(
+                    lambda _=False, n=str(item_name): self._go_to_item_by_name(n)
+                )
+            else:
+                # still switch to items tab, but without reliable prefill
+                item_btn.clicked.connect(lambda _=False: self._go_to_item_by_name(""))
+
+        lbl_value = QLabel(tv if tv else "—", alignment=Qt.AlignmentFlag.AlignCenter)
+        lbl_value.setWordWrap(True)
+        lbl_value.setMaximumWidth(140)
+
+        box.addWidget(lbl_arrow)
+        if item_btn is not None:
+            box.addWidget(item_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        box.addWidget(lbl_value)
+
+        return cont
+
+    def _make_evo_subtree_widget(self, node) -> QWidget:
+        dex_no = int(getattr(node, "dex_no", 0))
+        name = str(getattr(node, "name", "?"))
+        image = (
+            str(getattr(node, "image", "")) if getattr(node, "image", None) else None
+        )
+
+        children = getattr(node, "evolutions", ()) or ()
+        children = tuple(children)
+
+        if len(children) == 0:
+            return self._make_evo_pokemon_card(name=name, image=image, dex_no=dex_no)
+
+        if len(children) == 1:
+            child = children[0]
+            child_trigger_value = str(getattr(child, "evol_trigger_value", "NaN"))
+            child_item_image = str(getattr(child, "evol_image", "NaN"))
+
+            cont = QWidget()
+            row = QHBoxLayout(cont)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(12)
+
+            row.addWidget(
+                self._make_evo_pokemon_card(name=name, image=image, dex_no=dex_no)
             )
-        else:
-            btn.clicked.connect(
-                lambda: self._load_pokemon_data(identifier=name, form=None)
+            row.addWidget(
+                self._make_evo_transition_widget(child_trigger_value, child_item_image)
             )
+            row.addWidget(self._make_evo_subtree_widget(child))
+
+            return cont
 
         cont = QWidget()
-        box.addWidget(img)
-        box.addWidget(nm)
-        box.addWidget(dx)
-        box.addWidget(btn)
-        cont.setLayout(box)
-        cont.setMinimumWidth(120)
+        grid = QGridLayout(cont)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+
+        root_card = self._make_evo_pokemon_card(name=name, image=image, dex_no=dex_no)
+        grid.addWidget(
+            root_card, 0, 0, len(children), 1, alignment=Qt.AlignmentFlag.AlignTop
+        )
+
+        for i, child in enumerate(children):
+            child_trigger_value = str(getattr(child, "evol_trigger_value", "NaN"))
+            child_item_image = str(getattr(child, "evol_image", "NaN"))
+
+            grid.addWidget(
+                self._make_evo_transition_widget(child_trigger_value, child_item_image),
+                i,
+                1,
+                alignment=Qt.AlignmentFlag.AlignTop,
+            )
+            grid.addWidget(
+                self._make_evo_subtree_widget(child),
+                i,
+                2,
+                alignment=Qt.AlignmentFlag.AlignTop,
+            )
+
         return cont
 
     # -------- Forms combo: stable (frozen) --------
@@ -1784,7 +1992,7 @@ class PokedexWindow(QWidget):
             QMessageBox.warning(self, "Audio", f"Could not play cry:\n{e}")
 
     # -------------------------------------------------------------------------
-    # Statistics catalogs + autocompletes
+    # Statistics catalogs + autocompletes (Items completer now targets Pokédex > Items)
     # -------------------------------------------------------------------------
 
     def _init_statistics_catalogs(self):
