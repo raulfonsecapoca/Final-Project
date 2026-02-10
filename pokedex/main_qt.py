@@ -623,6 +623,7 @@ class PokedexWindow(QWidget):
         type_layout = QVBoxLayout()
         type_layout.addLayout(type_filters_layout)
         type_layout.addWidget(self.type_chart_view, 1)
+        self._add_save_chart_button(type_layout, self.type_chart_view, "type_chart.png")
         type_layout.addWidget(self.lbl_type_chart_info)
         type_box.setLayout(type_layout)
 
@@ -644,6 +645,7 @@ class PokedexWindow(QWidget):
         gen_layout = QVBoxLayout()
         gen_layout.addLayout(gen_filter_row)
         gen_layout.addWidget(self.gen_chart_view, 1)
+        self._add_save_chart_button(gen_layout, self.gen_chart_view, "generation_chart.png")
         gen_layout.addWidget(self.lbl_gen_chart_info)
         gen_box.setLayout(gen_layout)
 
@@ -741,24 +743,20 @@ class PokedexWindow(QWidget):
         info_layout.addWidget(self.lbl_hist_info, 1)
         info_box.setLayout(info_layout)
 
-        # Bottom area: left details + right chart
-        bottom_row = QHBoxLayout()
-        bottom_row.addWidget(info_box, 1)  # left
-        bottom_row.addWidget(self.hist_chart_view, 2)  # right (bigger)
-
+        # Bottom area: chart on top + details below (horizontal split)
         layout = QVBoxLayout()
         layout.addWidget(hint)
         layout.addWidget(self.hist_chk_forms_enable)
         layout.addWidget(hist_gens_box)
         layout.addWidget(controls_box)
-        layout.addLayout(bottom_row, 1)
 
-        # Save button (download chart)
-        self.btn_save_hist_chart = QPushButton("Save chart…")
-        layout.addWidget(self.btn_save_hist_chart, 0)
+        # Details (top)
+        layout.addWidget(info_box, 0)
+        # Chart (Bottom)
+        layout.addWidget(self.hist_chart_view, 1)
 
-        # Signals
-        self.btn_save_hist_chart.clicked.connect(self._on_save_hist_chart_clicked)
+        # Save button directly under the chart (uses the global helper)
+        self._add_save_chart_button(layout, self.hist_chart_view, "pokemon_histogram.png")
 
         self.hist_group.setLayout(layout)
         parent_layout.addWidget(self.hist_group)
@@ -820,6 +818,7 @@ class PokedexWindow(QWidget):
         egg_layout = QVBoxLayout()
         egg_layout.addLayout(filters_layout)
         egg_layout.addWidget(self.egg_chart_view, 1)
+        self._add_save_chart_button(egg_layout, self.egg_chart_view, "egg_chart.png")
         egg_layout.addWidget(self.lbl_egg_chart_info)
         egg_box.setLayout(egg_layout)
 
@@ -875,6 +874,7 @@ class PokedexWindow(QWidget):
         self.lbl_ability_type_chart_info = QLabel("—")
         self.lbl_ability_type_chart_info.setWordWrap(True)
         left_layout.addWidget(self.ability_type_chart_view, 1)
+        self._add_save_chart_button(left_layout, self.ability_type_chart_view, "ability_type_chart.png")
         left_layout.addWidget(self.lbl_ability_type_chart_info)
 
         right_box = QGroupBox("Generation Chart")
@@ -886,6 +886,7 @@ class PokedexWindow(QWidget):
         self.lbl_ability_gen_chart_info = QLabel("—")
         self.lbl_ability_gen_chart_info.setWordWrap(True)
         right_layout.addWidget(self.ability_gen_chart_view, 1)
+        self._add_save_chart_button(right_layout, self.ability_gen_chart_view, "ability_gen_chart.png")
         right_layout.addWidget(self.lbl_ability_gen_chart_info)
 
         charts_row.addWidget(left_box, 1)
@@ -1470,22 +1471,26 @@ class PokedexWindow(QWidget):
 
         info_label.setText("\n".join(lines))
 
-    def _on_save_hist_chart_clicked(self) -> None:
-        """Save the current histogram chart as an image file (PNG/JPG)."""
-        if not hasattr(self, "hist_chart_view"):
-            return
+    def _add_save_chart_button(self, parent_layout, chart_view: QChartView, default_name: str):
+        """Add a 'Save chart…' button under a QChartView and wire it to export the chart image."""
+        btn = QPushButton("Save chart…")
+        parent_layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignRight)
 
-        filename, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save histogram chart",
-            "histogram.png",
-            "PNG Image (*.png);;JPEG Image (*.jpg *.jpeg)",
-        )
-        if not filename:
-            return
+        def on_save_clicked():
+            
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save chart",
+                default_name,
+                "PNG Image (*.png);;JPEG Image (*.jpg *.jpeg)",
+            )
+            if not filename:
+                return
+            chart_view.grab().save(filename)
 
-        pixmap = self.hist_chart_view.grab()
-        pixmap.save(filename)
+        btn.clicked.connect(on_save_clicked)
+        return btn
+
 
     # -------------------------------------------------------------------------
     # Language bar
