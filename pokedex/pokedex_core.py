@@ -545,7 +545,7 @@ class PokedexAPI:
             )
             for child_id in children
         )
-        print(evol_image)
+
         return PokemonEvolNode(
             dex_no=int(species_id),
             name=name,

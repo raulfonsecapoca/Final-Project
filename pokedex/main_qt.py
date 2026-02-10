@@ -28,7 +28,7 @@ from PySide6.QtCharts import (
     QValueAxis,
 )
 from PySide6.QtCore import QMargins, QSize, QStringListModel, Qt, QUrl
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
@@ -208,6 +208,65 @@ def _lang_autonym(lang_id: int) -> str:
     return str(lang_id)
 
 
+def _wrap_in_scroll(content: QWidget) -> QScrollArea:
+    """Create a scroll area wrapper for a content widget (portability on smaller screens)."""
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setWidget(content)
+    return scroll
+
+
+def _enable_antialiasing(chart_view: QChartView) -> None:
+    """Enable better rendering across platforms."""
+    try:
+        chart_view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        chart_view.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        chart_view.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    except Exception:
+        pass
+
+
+class AutoPixmapLabel(QLabel):
+    """
+    QLabel that automatically scales a source pixmap to its current size
+    while keeping aspect ratio. Useful for responsive UIs.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._src_pixmap = QPixmap()
+        self._min_side = 160
+
+    def setSourcePixmap(self, pixmap: QPixmap) -> None:
+        self._src_pixmap = pixmap if pixmap else QPixmap()
+        self._update_scaled()
+
+    def setMinimumSide(self, px: int) -> None:
+        self._min_side = max(1, int(px))
+        self._update_scaled()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_scaled()
+
+    def _update_scaled(self) -> None:
+        if self._src_pixmap.isNull():
+            # Do not overwrite text; caller controls placeholder text.
+            super().setPixmap(QPixmap())
+            return
+
+        w = max(self.width(), self._min_side)
+        h = max(self.height(), self._min_side)
+
+        scaled = self._src_pixmap.scaled(
+            QSize(w, h),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        super().setPixmap(scaled)
+
+
 # ---- Main Window --------------------------------------------------------------
 
 
@@ -222,7 +281,10 @@ class PokedexWindow(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Pokédex")
-        self.setMinimumSize(980, 720)
+
+        # Portability: less aggressive minimum size; content uses scroll areas.
+        self.setMinimumSize(800, 600)
+
         self.setWindowIcon(
             QIcon(_resolve_asset_path("data/sprites/sprites/items/poke-ball.png"))
         )
@@ -262,6 +324,9 @@ class PokedexWindow(QWidget):
         self.input_name = QLineEdit()
         self.input_name.setPlaceholderText(
             "Enter Pokémon name or number (e.g., pikachu or 25)"
+        )
+        self.input_name.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
 
         self.btn_load = QPushButton("Load")
@@ -349,16 +414,20 @@ class PokedexWindow(QWidget):
         """
         Build pokedex pokemon subtab.
 
-        Build and lay out widgets for this UI section.
-
-        Updates the UI using widget methods such as: ``setEnabled``, ``addWidget``, ``addLayout``.
+        Portability: wrap the full content in a scroll area so smaller screens do not break layouts.
         """
         # Left column
-        self.lbl_sprite = QLabel()
+        self.lbl_sprite = AutoPixmapLabel()
         self.lbl_sprite.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_sprite.setFrameShape(QFrame.Shape.Panel)
         self.lbl_sprite.setFrameShadow(QFrame.Shadow.Sunken)
-        self.lbl_sprite.setMinimumSize(256, 256)
+
+        # Responsive sprite sizing
+        self.lbl_sprite.setMinimumSize(220, 220)
+        self.lbl_sprite.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self.lbl_sprite.setMinimumSide(220)
 
         self.lbl_name = QLabel("<b>Name</b>")
         self.lbl_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -382,7 +451,11 @@ class PokedexWindow(QWidget):
         self.lbl_ability_desc = QLabel("—")
         self.lbl_ability_desc.setWordWrap(True)
         self.lbl_ability_desc.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.lbl_ability_desc.setMinimumHeight(70)
+        # Portability: don't force large minimum height
+        self.lbl_ability_desc.setMinimumHeight(0)
+        self.lbl_ability_desc.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding
+        )
 
         ag = QVBoxLayout()
         ag.addWidget(self.ability_combo)
@@ -402,7 +475,7 @@ class PokedexWindow(QWidget):
         # Pokédex flavor
         self.dex_group = QGroupBox("Pokédex Entry")
         self.dex_group.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
         )
 
         self.dex_combo = QComboBox()
@@ -413,10 +486,11 @@ class PokedexWindow(QWidget):
         self.lbl_flavor = QLabel("—")
         self.lbl_flavor.setWordWrap(True)
         self.lbl_flavor.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # Portability: remove forced height; allow scroll area to handle small windows
+        self.lbl_flavor.setMinimumHeight(0)
         self.lbl_flavor.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding
         )
-        self.lbl_flavor.setMinimumHeight(140)
 
         dex_layout = QVBoxLayout()
         row = QHBoxLayout()
@@ -478,17 +552,19 @@ class PokedexWindow(QWidget):
         main_row.addLayout(left_col, 1)
         main_row.addLayout(right_col, 2)
 
+        # Portability: wrap whole subtab content in a scroll area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addLayout(main_row, 1)
+
         tab_layout = QVBoxLayout(self.pokedex_pokemon_tab)
-        tab_layout.addLayout(main_row, 1)
+        tab_layout.addWidget(_wrap_in_scroll(content), 1)
 
     def _build_pokedex_items_subtab(self) -> None:
         """
         Build pokedex items subtab.
 
-        Build and lay out widgets for this UI section. Pokédex > Items subtab:
-        search (autocomplete) + show name, flavor text, and image.
-
-        Updates the UI using widget methods such as: ``addWidget``, ``addLayout``, ``setPlaceholderText``.
+        Portability: wrap in a scroll area to avoid overflow on small screens.
         """
         root = QVBoxLayout(self.pokedex_items_tab)
 
@@ -508,7 +584,10 @@ class PokedexWindow(QWidget):
         self.lbl_item_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_item_image.setFrameShape(QFrame.Shape.Panel)
         self.lbl_item_image.setFrameShadow(QFrame.Shadow.Sunken)
-        self.lbl_item_image.setMinimumSize(160, 160)
+        self.lbl_item_image.setMinimumSize(96, 96)
+        self.lbl_item_image.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
 
         text_col = QVBoxLayout()
 
@@ -518,7 +597,10 @@ class PokedexWindow(QWidget):
         self.lbl_item_desc = QLabel("—")
         self.lbl_item_desc.setWordWrap(True)
         self.lbl_item_desc.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.lbl_item_desc.setMinimumHeight(160)
+        self.lbl_item_desc.setMinimumHeight(0)
+        self.lbl_item_desc.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding
+        )
 
         text_col.addWidget(QLabel("Name:"))
         text_col.addWidget(self.lbl_item_name)
@@ -530,7 +612,13 @@ class PokedexWindow(QWidget):
         content_row.addLayout(text_col, 1)
 
         layout.addLayout(content_row, 1)
-        root.addWidget(box, 1)
+
+        # Portability: scroll wrapper for the box
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addWidget(box, 1)
+
+        root.addWidget(_wrap_in_scroll(content), 1)
 
         # Signals
         self.item_search.returnPressed.connect(self._on_update_item_details)
@@ -584,9 +672,7 @@ class PokedexWindow(QWidget):
         """
         Build general statistics subtab.
 
-        Build and lay out widgets for this UI section.
-
-        Updates the UI using widget methods such as: ``addWidget``, ``addLayout``.
+        Portability: wrap content in a scroll area (two charts side-by-side may overflow on small screens).
         """
         # ---------------- Type Chart (filters above) ----------------
         type_box = QGroupBox("Type Chart")
@@ -615,7 +701,7 @@ class PokedexWindow(QWidget):
 
         # Type chart view
         self.type_chart_view = QChartView()
-        self.type_chart_view.setRenderHint(self.type_chart_view.renderHints())
+        _enable_antialiasing(self.type_chart_view)
 
         self.lbl_type_chart_info = QLabel("—")
         self.lbl_type_chart_info.setWordWrap(True)
@@ -636,7 +722,7 @@ class PokedexWindow(QWidget):
         gen_filter_row.addWidget(self.gen_type_filter_combo, 1)
 
         self.gen_chart_view = QChartView()
-        self.gen_chart_view.setRenderHint(self.gen_chart_view.renderHints())
+        _enable_antialiasing(self.gen_chart_view)
 
         self.lbl_gen_chart_info = QLabel("—")
         self.lbl_gen_chart_info.setWordWrap(True)
@@ -652,8 +738,13 @@ class PokedexWindow(QWidget):
         main_row.addWidget(type_box, 1)
         main_row.addWidget(gen_box, 1)
 
+        # Portability: scroll wrapper for entire subtab
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addLayout(main_row, 1)
+
         layout = QVBoxLayout(self.stats_tab_general)
-        layout.addLayout(main_row, 1)
+        layout.addWidget(_wrap_in_scroll(content), 1)
 
         # ---------------- Signals (auto-update, no buttons) ----------------
         self.chk_forms_enable.toggled.connect(self._on_update_type_chart_clicked)
@@ -672,16 +763,7 @@ class PokedexWindow(QWidget):
         """
         Build pokemon histogram section.
 
-        Build and lay out widgets for this UI section.
-
-        Uses the data provider API via: ``api.get_stat_histogram()``.
-
-        Updates the UI using widget methods such as: ``addWidget``, ``addItem``.
-
-        Parameters
-        ----------
-        parent_layout: Any
-            Value provided by Qt (signal) or by the caller.
+        Portability: histogram section may be tall; keep inside a scroll-friendly group.
         """
         self.hist_group = QGroupBox("Stat Histogram (uses the top search bar)")
 
@@ -731,6 +813,7 @@ class PokedexWindow(QWidget):
 
         # Chart
         self.hist_chart_view = QChartView()
+        _enable_antialiasing(self.hist_chart_view)
 
         # Info panel (left)
         self.lbl_hist_info = QLabel("—")
@@ -761,7 +844,12 @@ class PokedexWindow(QWidget):
         self.btn_save_hist_chart.clicked.connect(self._on_save_hist_chart_clicked)
 
         self.hist_group.setLayout(layout)
-        parent_layout.addWidget(self.hist_group)
+
+        # Portability: wrap histogram group in scroll area via a content widget
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addWidget(self.hist_group, 1)
+        parent_layout.addWidget(_wrap_in_scroll(content), 1)
 
         # Signals: auto-update (like other charts)
         self.hist_chk_forms_enable.toggled.connect(self._on_update_stat_histogram)
@@ -781,10 +869,7 @@ class PokedexWindow(QWidget):
         """
         Build egg group chart subtab.
 
-        Build and lay out widgets for this UI section.
-        Egg Groups subtab: filters + uses api.get_egg_chart.
-
-        Updates the UI using widget methods such as: ``addWidget``, ``addLayout``.
+        Portability: wrap in a scroll area.
         """
         egg_box = QGroupBox("Egg Group Chart")
 
@@ -808,7 +893,7 @@ class PokedexWindow(QWidget):
         egg_filter_row.addWidget(self.egg_type_filter_combo, 1)
 
         self.egg_chart_view = QChartView()
-        self.egg_chart_view.setRenderHint(self.egg_chart_view.renderHints())
+        _enable_antialiasing(self.egg_chart_view)
 
         self.lbl_egg_chart_info = QLabel("—")
         self.lbl_egg_chart_info.setWordWrap(True)
@@ -823,8 +908,12 @@ class PokedexWindow(QWidget):
         egg_layout.addWidget(self.lbl_egg_chart_info)
         egg_box.setLayout(egg_layout)
 
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addWidget(egg_box, 1)
+
         layout = QVBoxLayout(self.stats_tab_egg)
-        layout.addWidget(egg_box, 1)
+        layout.addWidget(_wrap_in_scroll(content), 1)
 
         # Signals: auto-update (no button)
         for cb in self.egg_gen_checkboxes:
@@ -839,10 +928,7 @@ class PokedexWindow(QWidget):
         """
         Build abilities subtab.
 
-        Build and lay out widgets for this UI section.
-        Abilities subtab: show description + 2 charts side-by-side.
-
-        Updates the UI using widget methods such as: ``addWidget``, ``addLayout``, ``setPlaceholderText``.
+        Portability: wrap in a scroll area; charts may overflow on small screens.
         """
         root = QVBoxLayout(self.stats_tab_abilities)
 
@@ -859,7 +945,10 @@ class PokedexWindow(QWidget):
         self.lbl_ability_desc_stats = QLabel("—")
         self.lbl_ability_desc_stats.setWordWrap(True)
         self.lbl_ability_desc_stats.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.lbl_ability_desc_stats.setMinimumHeight(80)
+        self.lbl_ability_desc_stats.setMinimumHeight(0)
+        self.lbl_ability_desc_stats.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding
+        )
         layout.addWidget(QLabel("Description:"))
         layout.addWidget(self.lbl_ability_desc_stats)
 
@@ -869,9 +958,7 @@ class PokedexWindow(QWidget):
         left_box = QGroupBox("Type Chart")
         left_layout = QVBoxLayout(left_box)
         self.ability_type_chart_view = QChartView()
-        self.ability_type_chart_view.setRenderHint(
-            self.ability_type_chart_view.renderHints()
-        )
+        _enable_antialiasing(self.ability_type_chart_view)
         self.lbl_ability_type_chart_info = QLabel("—")
         self.lbl_ability_type_chart_info.setWordWrap(True)
         left_layout.addWidget(self.ability_type_chart_view, 1)
@@ -880,9 +967,7 @@ class PokedexWindow(QWidget):
         right_box = QGroupBox("Generation Chart")
         right_layout = QVBoxLayout(right_box)
         self.ability_gen_chart_view = QChartView()
-        self.ability_gen_chart_view.setRenderHint(
-            self.ability_gen_chart_view.renderHints()
-        )
+        _enable_antialiasing(self.ability_gen_chart_view)
         self.lbl_ability_gen_chart_info = QLabel("—")
         self.lbl_ability_gen_chart_info.setWordWrap(True)
         right_layout.addWidget(self.ability_gen_chart_view, 1)
@@ -893,7 +978,11 @@ class PokedexWindow(QWidget):
 
         layout.addLayout(charts_row, 1)
 
-        root.addWidget(box, 1)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addWidget(box, 1)
+
+        root.addWidget(_wrap_in_scroll(content), 1)
 
         # Signals: update on Enter; completer activation hooked in _init_statistics_catalogs
         self.ability_search.returnPressed.connect(self._on_update_ability_details)
@@ -1492,7 +1581,14 @@ class PokedexWindow(QWidget):
     # -------------------------------------------------------------------------
 
     def _build_language_bar(self, layout: QHBoxLayout):
+        # Portability: place language buttons inside a horizontal scroll area
         layout.addWidget(QLabel("Language:"))
+
+        inner = QWidget()
+        inner_layout = QHBoxLayout(inner)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setSpacing(6)
+
         self._lang_buttons: list[QToolButton] = []
         for lang_id, display in self._official_langs:
             btn = QToolButton()
@@ -1505,9 +1601,18 @@ class PokedexWindow(QWidget):
                 lambda _=False, lid=lang_id: self._on_language_selected(lid)
             )
             self._lang_buttons.append(btn)
-            layout.addWidget(btn)
+            inner_layout.addWidget(btn)
 
-        layout.addStretch()
+        inner_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(inner)
+
+        layout.addWidget(scroll, 1)
 
     def _on_language_selected(self, lang_id: int):
         if self.current_language_id == lang_id:
@@ -1656,13 +1761,13 @@ class PokedexWindow(QWidget):
         self.lbl_dex.setText(f"Dex #: {dex}")
 
         image = data.get("image")
-        pm = _load_pixmap(image) if image else QPixmap()
+        pm = _load_pixmap(image, None) if image else QPixmap()
         if pm.isNull():
             self.lbl_sprite.setText("No image")
-            self.lbl_sprite.setPixmap(QPixmap())
+            self.lbl_sprite.setSourcePixmap(QPixmap())
         else:
-            self.lbl_sprite.setPixmap(pm)
             self.lbl_sprite.setText("")
+            self.lbl_sprite.setSourcePixmap(pm)
 
     def _bind_types(self, types: list):
         while self.types_row.count() > 0:
@@ -1672,6 +1777,12 @@ class PokedexWindow(QWidget):
                 w.deleteLater()
 
         self.types_row.addStretch()
+
+        # Responsive icon size: based on sprite height (clamped)
+        try:
+            icon_px = max(36, min(72, int(self.lbl_sprite.height() * 0.18)))
+        except Exception:
+            icon_px = 48
 
         for t in types:
             try:
@@ -1687,7 +1798,13 @@ class PokedexWindow(QWidget):
             if pm.isNull():
                 lbl.setText(str(type_id))
             else:
-                lbl.setPixmap(pm)
+                lbl.setPixmap(
+                    pm.scaled(
+                        QSize(icon_px, icon_px),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
             self.types_row.addWidget(lbl)
 
         self.types_row.addStretch()
@@ -1820,7 +1937,8 @@ class PokedexWindow(QWidget):
         box.addWidget(lbl_name)
         box.addWidget(lbl_dex)
 
-        cont.setMinimumWidth(130)
+        # Portability: smaller min width (scroll area handles long lines anyway)
+        cont.setMinimumWidth(110)
         return cont
 
     def _make_evo_transition_widget(
