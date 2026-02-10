@@ -27,7 +27,6 @@ PokedexAPI
     Static API used by the GUI layer to query and aggregate data.
 """
 
-
 from __future__ import annotations
 
 import math
@@ -38,18 +37,19 @@ import numpy as np
 import pandas as pd
 
 # Path setup (works on Windows and Linux)
-MODULE_DIR = Path(__file__).resolve().parent          # .../pokedex
-PROJECT_ROOT = MODULE_DIR.parent                      # .../Final Project
+MODULE_DIR = Path(__file__).resolve().parent  # .../pokedex
+PROJECT_ROOT = MODULE_DIR.parent  # .../Final Project
 DATA_DIR = PROJECT_ROOT / "data" / "csv"
+
 
 def _read_csv(filename: str) -> pd.DataFrame:
     path = (DATA_DIR / filename).resolve()
     if not path.exists():
         raise FileNotFoundError(
-            f"CSV file not found: {path}\n"
-            f"Expected relative to project root: {DATA_DIR}"
+            f"CSV file not found: {path}\nExpected relative to project root: {DATA_DIR}"
         )
     return pd.read_csv(path)
+
 
 pokemon_df = _read_csv("pokemon.csv")
 pokemon_evolution_df = _read_csv("pokemon_evolution.csv")
@@ -87,8 +87,6 @@ evolution_triggers_df = _read_csv("evolution_triggers.csv")
 location_names_df = _read_csv("location_names.csv")
 
 
-
-
 @dataclass(frozen=True)
 class ChartData:
     """
@@ -117,6 +115,7 @@ class ChartData:
     selected markers) and is expected to contain only string keys/values for
     easy serialization and display.
     """
+
     title: str
     labels: list[str]
     values: list[int]
@@ -160,6 +159,7 @@ class PokemonEvolNode:
     strings and relative asset paths. If you need strict typing for missing
     values, consider replacing ``"NaN"`` with ``None`` and updating the UI logic.
     """
+
     dex_no: int
     name: str
     image: str
@@ -231,7 +231,7 @@ class PokedexAPI:
         -----
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
         """
-        
+
         # identifier can be DexNum (25) or name ("pikachu")
 
         if isinstance(identifier, str):
@@ -368,7 +368,6 @@ class PokedexAPI:
         species_id: int,
         language_id: int,
     ) -> PokemonEvolNode:
-        
         """
         PokedexAPI.Build evolution tree.
 
@@ -389,7 +388,7 @@ class PokedexAPI:
         -----
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
         """
-        
+
         # localized name
         name_row = pokemon_species_names_df[
             (pokemon_species_names_df["pokemon_species_id"] == species_id)
@@ -423,7 +422,6 @@ class PokedexAPI:
                 if evol_trigger_id != 0
                 else None
             )
-
 
             parts: list[str] = []
             evol_image = "NaN"
@@ -499,7 +497,6 @@ class PokedexAPI:
                 loc_name = PokedexAPI._get_location_localized_name(loc_id, language_id)
                 parts.append(f"Location: {loc_name}")
 
-
             if "gender_id" in r and not PokedexAPI._is_nan(r["gender_id"]):
                 parts.append(f"Gender {int(r['gender_id'])}")
 
@@ -531,7 +528,6 @@ class PokedexAPI:
             else:
                 # No extra conditions found -> show at least the trigger label (e.g. Trade for Golem)
                 evol_trigger_value = trigger_label if trigger_label else "NaN"
-
 
         # children species
         children = (
@@ -688,7 +684,7 @@ class PokedexAPI:
         -----
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
         """
-        
+
         ability_str = str(ability).strip()
         if not ability_str:
             raise ValueError("Ability is empty")
@@ -739,11 +735,11 @@ class PokedexAPI:
         return text
 
     @staticmethod
-    def get_type_chart(language_id: int = 9,
+    def get_type_chart(
+        language_id: int = 9,
         forms_enable: bool = False,
         generations_enable: list[bool] | None = None,
     ) -> ChartData:
-        
         """
         PokedexAPI.Get type chart.
 
@@ -771,7 +767,7 @@ class PokedexAPI:
         -----
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
         """
-        
+
         if generations_enable is None:
             generations_enable = [True] * 9
 
@@ -831,10 +827,10 @@ class PokedexAPI:
         )
 
     @staticmethod
-    def get_gen_chart(language_id: int = 9,
+    def get_gen_chart(
+        language_id: int = 9,
         type_filter: str | None = None,
     ) -> ChartData:
-        
         """
         PokedexAPI.Get gen chart.
 
@@ -860,7 +856,7 @@ class PokedexAPI:
         -----
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
         """
-        
+
         if type_filter is None:
             type_id_filter = None
         else:
@@ -950,7 +946,6 @@ class PokedexAPI:
 
     @staticmethod
     def get_all_abilities(language_id: int = 9) -> list[str] | list[tuple[str, str]]:
-
         """
         PokedexAPI.Get all abilities.
 
@@ -971,18 +966,16 @@ class PokedexAPI:
             List of display strings used to populate UI controls.
         """
 
-
         all_ability_ids = ability_flavor_text_df["ability_id"].unique().tolist()
 
         ability_names_df_filtered = ability_names_df[
             ability_names_df["local_language_id"] == language_id
         ]
-        
+
         ability_names_df_filtered = ability_names_df_filtered[
             ability_names_df_filtered["ability_id"].isin(all_ability_ids)
         ]["name"].tolist()
-        
-        
+
         return ability_names_df_filtered
 
     @staticmethod
@@ -1047,11 +1040,11 @@ class PokedexAPI:
         return item_names_filtered
 
     @staticmethod
-    def get_egg_chart( language_id: int = 9,
+    def get_egg_chart(
+        language_id: int = 9,
         type_filter: str | None = None,
         generations_enable: list[bool] | None = None,
     ) -> ChartData:
-        
         """
         PokedexAPI.Get egg chart.
 
@@ -1079,7 +1072,7 @@ class PokedexAPI:
         -----
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
         """
-       
+
         if generations_enable is None:
             generations_enable = [True] * 9
 
@@ -1147,10 +1140,10 @@ class PokedexAPI:
         )
 
     @staticmethod
-    def get_ability_type_chart( ability: str,
+    def get_ability_type_chart(
+        ability: str,
         language_id: int = 9,
     ) -> ChartData:
-        
         """
         PokedexAPI.Get ability type chart.
 
@@ -1172,7 +1165,7 @@ class PokedexAPI:
         ChartData
             Aggregated chart payload consumed by the Qt GUI.
         """
-        
+
         ability_str = str(ability).strip()
         if not ability_str:
             raise ValueError("Ability is empty")
@@ -1235,10 +1228,10 @@ class PokedexAPI:
         )
 
     @staticmethod
-    def get_ability_gen_chart( ability: str,
+    def get_ability_gen_chart(
+        ability: str,
         language_id: int = 9,
     ) -> ChartData:
-        
         """
         PokedexAPI.Get ability gen chart.
 
@@ -1260,7 +1253,7 @@ class PokedexAPI:
         ChartData
             Aggregated chart payload consumed by the Qt GUI.
         """
-        
+
         ability_str = str(ability).strip()
         if not ability_str:
             raise ValueError("Ability is empty")
@@ -1327,7 +1320,6 @@ class PokedexAPI:
 
     @staticmethod
     def get_item(item: str, language_id: int = 9) -> dict:
-
         """
         PokedexAPI.Get item.
 
@@ -1429,7 +1421,6 @@ class PokedexAPI:
         | None = None,  # e.g. (0, 255) if you want fixed range
         form: int | str | None = None,  # optional, same idea as get_pokemon
     ) -> ChartData:
-        
         """
         Build a histogram of a given base stat over the pokemons selected by filters,
         and include metadata to highlight the selected pokemon.
@@ -1742,7 +1733,6 @@ class PokedexAPI:
         if s.empty:
             return None
         return str(s.iloc[0])
-    
 
     @staticmethod
     def _get_evolution_trigger_label(trigger_id: int) -> str | None:
@@ -1765,7 +1755,6 @@ class PokedexAPI:
             return label
         except Exception:
             return None
-
 
     @staticmethod
     def _get_location_localized_name(location_id: int, language_id: int) -> str:
@@ -1799,4 +1788,3 @@ class PokedexAPI:
                 return name
 
         return str(lid)
-
