@@ -1,56 +1,122 @@
-"""This module shows you how you can construct a nice documentation with
-sphinx and the right syntaxe for docstrings.
 """
+Pokédex data access and aggregation layer.
+
+This module loads the local Pokédex CSV dataset into pandas DataFrames and
+exposes a GUI-friendly API via :class:`~pokedex.pokedex_api.PokedexAPI`.
+
+The public methods assemble UI payloads (dicts and dataclasses) for the Qt
+interface, including:
+- Pokémon details (types, base stats, abilities, egg groups, forms)
+- Evolution tree construction with trigger metadata
+- Aggregated charts (type, generation, egg group, stat histograms)
+- Localized text with an English fallback (language id 9)
+
+Notes
+-----
+- CSV files are resolved relative to the project root under ``data/csv``.
+- DataFrames are loaded at import time. If you need lazy loading or faster
+  startup, consider moving I/O behind a loader function or using caching.
+
+See Also
+--------
+ChartData
+    Immutable container for chart payloads.
+PokemonEvolNode
+    Node structure used to represent evolution chains in the UI.
+PokedexAPI
+    Static API used by the GUI layer to query and aggregate data.
+"""
+
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-pokemon_df = pd.read_csv("data/csv/pokemon.csv")
-pokemon_evolution_df = pd.read_csv("data/csv/pokemon_evolution.csv")
-pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
+# Path setup (works on Windows and Linux)
+MODULE_DIR = Path(__file__).resolve().parent          # .../pokedex
+PROJECT_ROOT = MODULE_DIR.parent                      # .../Final Project
+DATA_DIR = PROJECT_ROOT / "data" / "csv"
+
+def _read_csv(filename: str) -> pd.DataFrame:
+    path = (DATA_DIR / filename).resolve()
+    if not path.exists():
+        raise FileNotFoundError(
+            f"CSV file not found: {path}\n"
+            f"Expected relative to project root: {DATA_DIR}"
+        )
+    return pd.read_csv(path)
+
+pokemon_df = _read_csv("pokemon.csv")
+pokemon_evolution_df = _read_csv("pokemon_evolution.csv")
+pokemon_species_df = _read_csv("pokemon_species.csv")
+
+pokemon_types_df = _read_csv("pokemon_types.csv")
+types_df = _read_csv("types.csv")
+type_names_df = _read_csv("type_names.csv")
+# types_sprites_df = pd.read_csv(PROJECT_ROOT / "data" / "sprites" / ...)
+
+pokemon_stats_df = _read_csv("pokemon_stats.csv")
+stats_df = _read_csv("stats.csv")
+
+pokemon_forms_df = _read_csv("pokemon_forms.csv")
+
+pokemon_species_flavor_text_df = _read_csv("pokemon_species_flavor_text.csv")
+versions_df = _read_csv("versions.csv")
+languages_df = _read_csv("languages.csv")
+pokemon_species_names_df = _read_csv("pokemon_species_names.csv")  # localized names
+
+pokemon_egg_groups_df = _read_csv("pokemon_egg_groups.csv")
+egg_groups_prose_df = _read_csv("egg_group_prose.csv")
+
+pokemon_abilities_df = _read_csv("pokemon_abilities.csv")
+ability_names_df = _read_csv("ability_names.csv")
+ability_flavor_text_df = _read_csv("ability_flavor_text.csv")
+
+generation_names_df = _read_csv("generation_names.csv")
+
+items_df = _read_csv("items.csv")
+item_names_df = _read_csv("item_names.csv")
+item_flavor_text_df = _read_csv("item_flavor_text.csv")
+
+evolution_triggers_df = _read_csv("evolution_triggers.csv")
+location_names_df = _read_csv("location_names.csv")
 
 
-pokemon_types_df = pd.read_csv("data/csv/pokemon_types.csv")
-types_df = pd.read_csv("data/csv/types.csv")
-type_names_df = pd.read_csv("data/csv/type_names.csv")
-# types_sprites_df= pd.read_csv("data/sprites/sprites/types/generation-ix/scarlet-violet.csv")
-
-pokemon_stats_df = pd.read_csv("data/csv/pokemon_stats.csv")
-stats_df = pd.read_csv("data/csv/stats.csv")
-
-pokemon_forms_df = pd.read_csv("data/csv/pokemon_forms.csv")
-
-
-pokemon_species_flavor_text_df = pd.read_csv("data/csv/pokemon_species_flavor_text.csv")
-versions_df = pd.read_csv("data/csv/versions.csv")
-languages_df = pd.read_csv("data/csv/languages.csv")
-pokemon_species_names_df = pd.read_csv(
-    "data/csv/pokemon_species_names.csv"
-)  # for localized names
-
-pokemon_egg_groups_df = pd.read_csv("data/csv/pokemon_egg_groups.csv")
-egg_groups_prose_df = pd.read_csv("data/csv/egg_group_prose.csv")
-
-
-pokemon_abilities_df = pd.read_csv("data/csv/pokemon_abilities.csv")
-ability_names_df = pd.read_csv("data/csv/ability_names.csv")
-ability_flavor_text_df = pd.read_csv("data/csv/ability_flavor_text.csv")
-
-generation_names_df = pd.read_csv("data/csv/generation_names.csv")
-
-
-items_df = pd.read_csv("data/csv/items.csv")
-item_names_df = pd.read_csv("data/csv/item_names.csv")
-item_flavor_text_df = pd.read_csv("data/csv/item_flavor_text.csv")
 
 
 @dataclass(frozen=True)
 class ChartData:
+    """
+    Container for chart payloads used by the GUI.
+
+    This dataclass is a lightweight, immutable structure that represents a
+    pre-aggregated chart ready to be rendered by the Qt interface. It holds a
+    chart title, category labels, numeric values, and an optional metadata map.
+
+    Parameters
+    ----------
+    title : str
+        Human-readable chart title (e.g. ``"Type Chart"``).
+    labels : list[str]
+        Category labels associated with each value (e.g. type names, generations).
+    values : list[int]
+        Counts for each label. Must have the same length as ``labels``.
+    total : int
+        Total number of unique items represented by the chart (e.g. unique Pokémon).
+    meta : dict[str, str]
+        Additional metadata describing the chart and filters used to generate it.
+
+    Notes
+    -----
+    The ``meta`` field is intended for UI hints (descriptions, filter settings,
+    selected markers) and is expected to contain only string keys/values for
+    easy serialization and display.
+    """
     title: str
     labels: list[str]
     values: list[int]
@@ -60,6 +126,40 @@ class ChartData:
 
 @dataclass(frozen=True)
 class PokemonEvolNode:
+    """
+    Node in a Pokémon evolution tree.
+
+    Each node represents a single species (by National Dex number / species id)
+    and stores display fields used by the GUI, including the sprite path and
+    evolution trigger metadata describing how this node is reached from its
+    parent. Child evolutions are stored recursively as a tuple of nodes.
+
+    Parameters
+    ----------
+    dex_no : int
+        Species identifier (typically the National Dex number / species id).
+    name : str
+        Localized species name for UI display.
+    image : str
+        Relative path to the Pokémon sprite used by the GUI.
+    evol_trigger_id : int
+        Numeric evolution trigger identifier. Use ``0`` when no trigger exists
+        (e.g. root of the chain).
+    evol_trigger_value : str, default="NaN"
+        Human-readable description of the trigger (e.g. ``"Lv. 16"`` or
+        ``"Held: Metal Coat"``). Use ``"NaN"`` when not applicable.
+    evol_image : str, default="NaN"
+        Optional sprite path used to represent a trigger item in the UI.
+        Use ``"NaN"`` when not applicable.
+    evolutions : tuple[PokemonEvolNode, ...], default=()
+        Child evolution nodes.
+
+    Notes
+    -----
+    This structure is designed for rendering; it intentionally stores display
+    strings and relative asset paths. If you need strict typing for missing
+    values, consider replacing ``"NaN"`` with ``None`` and updating the UI logic.
+    """
     dex_no: int
     name: str
     image: str
@@ -71,15 +171,33 @@ class PokemonEvolNode:
 
 class PokedexAPI:
     """
-    pokemon_df = pd.read_csv("data/csv/pokemon.csv")
-    pokemon_evolution_df = pd.read_csv("data/csv/pokemon_evolution.csv")
-    pokemon_types_df = pd.read_csv("data/csv/pokemon_types.csv")
-    types_df = pd.read_csv("data/csv/types.csv")
+    Data access and aggregation layer for the Pokédex project.
 
-    dexNum = 25
+    This class provides a set of static methods that query the local Pokédex CSV
+    dataset (loaded into pandas DataFrames) and assemble UI-facing payloads for
+    the Qt interface. It centralizes business logic such as localization fallback,
+    evolution tree construction, and chart aggregation.
 
-    pokemonListSearch = pokemon_df[pokemon_df["species_id"] == dexNum]
-    print(pokemonListSearch)
+    The public methods return plain Python structures (dict/list) or
+    :class:`~pokedex.pokedex_core.ChartData` / :class:`~pokedex.pokedex_core.PokemonEvolNode`
+    objects to keep the GUI layer simple.
+
+    Notes
+    -----
+    **Localization fallback**
+        Many methods accept ``language_id``. When localized text is unavailable,
+        the implementation falls back to English (language id 9).
+
+    **Paths**
+        Asset paths in returned payloads are relative strings intended to be
+        resolved by the GUI (e.g. sprite paths under ``data/sprites/...``).
+
+    See Also
+    --------
+    ChartData
+        Chart container used by GUI plots.
+    PokemonEvolNode
+        Evolution tree node returned by :meth:`build_evolution_tree`.
     """
 
     @staticmethod
@@ -300,6 +418,12 @@ class PokedexAPI:
                 if not PokedexAPI._is_nan(r["evolution_trigger_id"])
                 else 0
             )
+            trigger_label = (
+                PokedexAPI._get_evolution_trigger_label(evol_trigger_id)
+                if evol_trigger_id != 0
+                else None
+            )
+
 
             parts: list[str] = []
             evol_image = "NaN"
@@ -371,7 +495,10 @@ class PokedexAPI:
                 parts.append(f"Move type {int(r['known_move_type_id'])}")
 
             if "location_id" in r and not PokedexAPI._is_nan(r["location_id"]):
-                parts.append(f"Location {int(r['location_id'])}")
+                loc_id = int(r["location_id"])
+                loc_name = PokedexAPI._get_location_localized_name(loc_id, language_id)
+                parts.append(f"Location: {loc_name}")
+
 
             if "gender_id" in r and not PokedexAPI._is_nan(r["gender_id"]):
                 parts.append(f"Gender {int(r['gender_id'])}")
@@ -395,7 +522,16 @@ class PokedexAPI:
             ):
                 parts.append("Upside down")
 
-            evol_trigger_value = ", ".join(parts) if parts else "NaN"
+            if parts:
+                # If we have conditions, optionally prepend the trigger when it adds meaning (e.g. Trade)
+                if trigger_label and trigger_label.casefold() == "trade":
+                    evol_trigger_value = ", ".join([trigger_label] + parts)
+                else:
+                    evol_trigger_value = ", ".join(parts)
+            else:
+                # No extra conditions found -> show at least the trigger label (e.g. Trade for Golem)
+                evol_trigger_value = trigger_label if trigger_label else "NaN"
+
 
         # children species
         children = (
@@ -413,7 +549,7 @@ class PokedexAPI:
             )
             for child_id in children
         )
-
+        print(evol_image)
         return PokemonEvolNode(
             dex_no=int(species_id),
             name=name,
@@ -835,9 +971,18 @@ class PokedexAPI:
             List of display strings used to populate UI controls.
         """
 
+
+        all_ability_ids = ability_flavor_text_df["ability_id"].unique().tolist()
+
         ability_names_df_filtered = ability_names_df[
             ability_names_df["local_language_id"] == language_id
+        ]
+        
+        ability_names_df_filtered = ability_names_df_filtered[
+            ability_names_df_filtered["ability_id"].isin(all_ability_ids)
         ]["name"].tolist()
+        
+        
         return ability_names_df_filtered
 
     @staticmethod
@@ -1597,3 +1742,61 @@ class PokedexAPI:
         if s.empty:
             return None
         return str(s.iloc[0])
+    
+
+    @staticmethod
+    def _get_evolution_trigger_label(trigger_id: int) -> str | None:
+        """
+        Return a human-readable label for an evolution trigger id using evolution_triggers.csv.
+        """
+        try:
+            row = evolution_triggers_df[evolution_triggers_df["id"] == int(trigger_id)]
+            if row.empty:
+                return None
+            ident = str(row.iloc[0]["identifier"]).strip()
+            if not ident:
+                return None
+
+            # Convert slug to nicer label
+            # e.g. "level-up" -> "Level up"
+            label = ident.replace("-", " ").strip()
+            if label:
+                label = label[0].upper() + label[1:]
+            return label
+        except Exception:
+            return None
+
+
+    @staticmethod
+    def _get_location_localized_name(location_id: int, language_id: int) -> str:
+        """
+        Resolve location name using location_names.csv with language fallback to English (9).
+        If missing, return the numeric id as string.
+        """
+        try:
+            lid = int(location_id)
+        except Exception:
+            return str(location_id)
+
+        # Preferred language
+        row = location_names_df[
+            (location_names_df["location_id"] == lid)
+            & (location_names_df["local_language_id"] == int(language_id))
+        ]
+        if not row.empty:
+            name = str(row.iloc[0]["name"]).strip()
+            if name:
+                return name
+
+        # Fallback to English
+        row = location_names_df[
+            (location_names_df["location_id"] == lid)
+            & (location_names_df["local_language_id"] == 9)
+        ]
+        if not row.empty:
+            name = str(row.iloc[0]["name"]).strip()
+            if name:
+                return name
+
+        return str(lid)
+

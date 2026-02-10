@@ -1,7 +1,6 @@
 Functional API
 ==============
 
-
 .. autosummary::
    :nosignatures:
    :toctree: generated

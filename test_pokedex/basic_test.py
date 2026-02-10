@@ -1,4 +1,4 @@
-from pokedex.my_module import PokedexAPI
+from pokedex.pokedex_core import PokedexAPI
 
 
 def test_get_pokemon():

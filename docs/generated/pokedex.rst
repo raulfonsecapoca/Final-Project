@@ -30,4 +30,4 @@
    :recursive:
 
    main_qt
-   my_module
+   pokedex_core

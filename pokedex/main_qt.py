@@ -1,40 +1,8 @@
-# main_qt.py
-# """
-# Pokédex app UI using PySide6.
-#
-# This file expects pokedex.my_module.PokedexAPI to expose:
-#
-# - get_pokemon(identifier: str, form: str | None = None, language_id: int = 9) -> dict
-#   - returning keys:
-#     - name, dex_number, image, cries (list[str]), types (list[int|str]),
-#     - base_stats (dict[str,int]), evolution_line (list[dict{name,image,dex_number}] OR PokemonEvolNode-like),
-#     - forms (list[str]|optional)
-#   - NEW keys recommended:
-#     - abilities (list[str]|optional)
-#     - egg_groups (list[str]|optional)
-#
-# - (optional) get_available_forms(identifier) -> list[str]
-# - (optional) get_pokedex_flavor(identifier: str, language_id: int = 9)
-#   returning {"versions": list, "flavor_texts": list}
-#
-# NEW (stubs you implement for the UI to fully work):
-# - get_ability_description(ability: str, is_hidden: bool, language_id: int = 9) -> str
-# - get_all_types(language_id: int = 9) -> list[str] or list[tuple[str,str]]
-# - get_all_abilities(language_id: int = 9) -> list[str] or list[tuple[str,str]]
-# - get_stat_rank(identifier: str, stat_key: str, language_id: int = 9, type_filter: str | None = None) -> dict
-# - count_pokemon_with_ability(ability: str, type_filter: str | None = None) -> int
-# - count_pokemon_in_egg_group(egg_group: str, type_filter: str | None = None) -> int
-# - get_ability_type_chart(ability: str, language_id: int = 9) -> ChartData
-# - get_ability_gen_chart(ability: str, language_id: int = 9) -> ChartData
-# - get_item(item: str, language_id: int = 9) -> dict
-# - get_all_items(language_id: int = 9) -> list[str] or list[tuple[str,str]]
-# """
-
 """
 Pokédex GUI (PySide6).
 
 This module implements the Qt user interface for the Pokédex project.
-All domain data is provided by :class:`pokedex.my_module.PokedexAPI` (imported as ``api``).
+All domain data is provided by :class:`pokedex.pokedex_core.PokedexAPI` (imported as ``api``).
 
 The UI is split into two main tabs:
 * Pokédex: Pokémon details (sprite, types, stats, evolution, flavor, abilities).
@@ -84,23 +52,36 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pokedex.my_module import PokedexAPI as api  # your data provider
+from pokedex.pokedex_core import PokedexAPI as api  # your data provider
 
 # ---- CSVs for language metadata + localized Pokémon names (autocomplete) ------
-language_names_df = pd.read_csv("data/csv/language_names.csv")
-languages_df = pd.read_csv("data/csv/languages.csv")
-pokemon_species_df = pd.read_csv("data/csv/pokemon_species.csv")
-pokemon_species_names_df = pd.read_csv(
-    "data/csv/pokemon_species_names.csv"
-)  # localized names
+
+# Path setup (works on Windows and Linux)
+MODULE_DIR = Path(__file__).resolve().parent  # .../pokedex
+PROJECT_ROOT = MODULE_DIR.parent  # .../Final Project
+DATA_DIR = PROJECT_ROOT / "data" / "csv"
+
+
+def _read_csv(filename: str) -> pd.DataFrame:
+    path = (DATA_DIR / filename).resolve()
+    if not path.exists():
+        raise FileNotFoundError(
+            f"CSV file not found: {path}\nExpected relative to project root: {DATA_DIR}"
+        )
+    return pd.read_csv(path)
+
+
+language_names_df = _read_csv("language_names.csv")
+languages_df = _read_csv("languages.csv")
+pokemon_species_df = _read_csv("pokemon_species.csv")
+pokemon_species_names_df = _read_csv("pokemon_species_names.csv")  # localized names
 
 # ---- CSVs for item-name resolution from item sprite identifier (for evo click) ----
-items_df = pd.read_csv("data/csv/items.csv")
-item_names_df = pd.read_csv("data/csv/item_names.csv")
+items_df = _read_csv("items.csv")
+item_names_df = _read_csv("item_names.csv")
 
-BASE_DIR = Path(__file__).resolve().parent.parent  # Final-Project/
 TYPE_ICON_DIR = (
-    BASE_DIR
+    PROJECT_ROOT
     / "data"
     / "sprites"
     / "sprites"
@@ -135,6 +116,32 @@ TYPE_IDENTIFIERS: list[str] = [
 # ---- Helpers -----------------------------------------------------------------
 
 
+def _resolve_asset_path(path_or_url: str) -> str:
+    """
+    Resolve asset references (paths) coming from the API/UI.
+
+    This fixes image/audio loading when the application is launched with a different
+    current working directory (CWD).
+
+    Rules:
+    - If it's an HTTP(S) URL, return as-is.
+    - If it's an absolute filesystem path, return as-is.
+    - Otherwise, treat it as PROJECT_ROOT-relative (e.g., "data/...").
+    """
+    s = str(path_or_url).strip()
+    if not s:
+        return ""
+
+    if s.startswith(("http://", "https://")):
+        return s
+
+    p = Path(s)
+    if p.is_absolute():
+        return str(p)
+
+    return str((PROJECT_ROOT / p).resolve())
+
+
 def _load_pixmap(path_or_url: str, max_size: QSize | None = QSize(256, 256)) -> QPixmap:
     """
     Load image from local path or URL into QPixmap; optionally scale preserving aspect ratio.
@@ -153,13 +160,17 @@ def _load_pixmap(path_or_url: str, max_size: QSize | None = QSize(256, 256)) -> 
     Supports both local file paths and HTTP(S) URLs. Returns an empty ``QPixmap`` on failure.
     """
     try:
-        if path_or_url.startswith(("http://", "https://")):
-            resp = requests.get(path_or_url, timeout=10)
+        resolved = _resolve_asset_path(path_or_url)
+        if not resolved:
+            return QPixmap()
+
+        if resolved.startswith(("http://", "https://")):
+            resp = requests.get(resolved, timeout=10)
             resp.raise_for_status()
             pm = QPixmap()
             pm.loadFromData(resp.content)
         else:
-            pm = QPixmap(path_or_url)
+            pm = QPixmap(resolved)
 
         if not pm or pm.isNull():
             return QPixmap()
@@ -187,7 +198,6 @@ def _lang_autonym(lang_id: int) -> str:
     lang_id: Any
         Value provided by Qt (signal) or by the caller.
     """
-  
     df = language_names_df
     row = df[(df["language_id"] == lang_id) & (df["local_language_id"] == lang_id)]
     if not row.empty:
@@ -203,17 +213,19 @@ def _lang_autonym(lang_id: int) -> str:
 
 class PokedexWindow(QWidget):
     """
-    Init.
+    Main window of the Pokédex Qt application.
 
-    Helper method used by the UI layer.
-
-    Updates the UI using widget methods such as: ``setEnabled``, ``addWidget``, ``addLayout``, ``setPlaceholderText``, ``setWindowTitle``, ``setWindowIcon``.
+    This widget assembles the full GUI, including the Pokédex and Statistics tabs,
+    and delegates domain queries to :class:`pokedex.pokedex_core.PokedexAPI`.
     """
-    def __init__(self):
-        super().__init__()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
         self.setWindowTitle("Pokédex")
         self.setMinimumSize(980, 720)
-        self.setWindowIcon(QIcon("data/sprites/sprites/items/poke-ball.png"))
+        self.setWindowIcon(
+            QIcon(_resolve_asset_path("data/sprites/sprites/items/poke-ball.png"))
+        )
 
         # Playback
         self.player = QMediaPlayer(self)
@@ -332,7 +344,6 @@ class PokedexWindow(QWidget):
 
         self._build_pokedex_pokemon_subtab()
         self._build_pokedex_items_subtab()
-
 
     def _build_pokedex_pokemon_subtab(self):
         """
@@ -471,16 +482,14 @@ class PokedexWindow(QWidget):
         tab_layout.addLayout(main_row, 1)
 
     def _build_pokedex_items_subtab(self) -> None:
-
         """
         Build pokedex items subtab.
 
-        Build and lay out widgets for this UI section. Pokédex > Items subtab: 
+        Build and lay out widgets for this UI section. Pokédex > Items subtab:
         search (autocomplete) + show name, flavor text, and image.
 
         Updates the UI using widget methods such as: ``addWidget``, ``addLayout``, ``setPlaceholderText``.
         """
-        
         root = QVBoxLayout(self.pokedex_items_tab)
 
         box = QGroupBox("Item Details")
@@ -674,7 +683,6 @@ class PokedexWindow(QWidget):
         parent_layout: Any
             Value provided by Qt (signal) or by the caller.
         """
-
         self.hist_group = QGroupBox("Stat Histogram (uses the top search bar)")
 
         hint = QLabel(
@@ -733,11 +741,9 @@ class PokedexWindow(QWidget):
         info_layout.addWidget(self.lbl_hist_info, 1)
         info_box.setLayout(info_layout)
 
-        
-
         # Bottom area: left details + right chart
         bottom_row = QHBoxLayout()
-        bottom_row.addWidget(info_box, 1)           # left
+        bottom_row.addWidget(info_box, 1)  # left
         bottom_row.addWidget(self.hist_chart_view, 2)  # right (bigger)
 
         layout = QVBoxLayout()
@@ -745,9 +751,8 @@ class PokedexWindow(QWidget):
         layout.addWidget(self.hist_chk_forms_enable)
         layout.addWidget(hist_gens_box)
         layout.addWidget(controls_box)
-        layout.addLayout(bottom_row, 1) 
-        
-        
+        layout.addLayout(bottom_row, 1)
+
         # Save button (download chart)
         self.btn_save_hist_chart = QPushButton("Save chart…")
         layout.addWidget(self.btn_save_hist_chart, 0)
@@ -773,7 +778,6 @@ class PokedexWindow(QWidget):
         self._on_update_stat_histogram()
 
     def _build_egg_group_chart_subtab(self) -> None:
-
         """
         Build egg group chart subtab.
 
@@ -782,7 +786,6 @@ class PokedexWindow(QWidget):
 
         Updates the UI using widget methods such as: ``addWidget``, ``addLayout``.
         """
-
         egg_box = QGroupBox("Egg Group Chart")
 
         egg_gens_box = QGroupBox("Generations")
@@ -831,18 +834,16 @@ class PokedexWindow(QWidget):
         )
 
         self._on_update_egg_chart_clicked()
-    
-    def _build_abilities_subtab(self) -> None:
 
+    def _build_abilities_subtab(self) -> None:
         """
         Build abilities subtab.
 
-        Build and lay out widgets for this UI section. 
+        Build and lay out widgets for this UI section.
         Abilities subtab: show description + 2 charts side-by-side.
 
         Updates the UI using widget methods such as: ``addWidget``, ``addLayout``, ``setPlaceholderText``.
         """
-    
         root = QVBoxLayout(self.stats_tab_abilities)
 
         box = QGroupBox("Ability Details")
@@ -904,22 +905,7 @@ class PokedexWindow(QWidget):
     # Charts handlers
     # -------------------------------------------------------------------------
 
-        
     def _on_update_type_chart_clicked(self) -> None:
-        """
-        On update type chart clicked.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.chk_forms_enable.toggled.connect(self._on_update_type_chart_clicked); cb.toggled.connect(self._on_update_type_chart_clicked)``.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_type_chart()``.
-
-        Updates the UI using widget methods such as: ``setText``, ``setChart``.
-        """
-
         if not hasattr(api, "get_type_chart"):
             self.lbl_type_chart_info.setText("TODO: implement api.get_type_chart(...)")
             self.type_chart_view.setChart(QChart())
@@ -944,22 +930,7 @@ class PokedexWindow(QWidget):
             self.lbl_type_chart_info.setText(f"Error: {e}")
             self.type_chart_view.setChart(QChart())
 
-
     def _on_update_gen_chart_clicked(self) -> None:
-        """
-        On update gen chart clicked.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by a Qt signal (button click, text input, or selection change).
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_gen_chart()``.
-
-        Updates the UI using widget methods such as: ``setText``, ``setChart``.
-        """
-
         if not hasattr(api, "get_gen_chart"):
             self.lbl_gen_chart_info.setText("TODO: implement api.get_gen_chart(...)")
             self.gen_chart_view.setChart(QChart())
@@ -986,22 +957,7 @@ class PokedexWindow(QWidget):
             self.lbl_gen_chart_info.setText(f"Error: {e}")
             self.gen_chart_view.setChart(QChart())
 
-        
     def _on_update_egg_chart_clicked(self) -> None:
-        """
-        On update egg chart clicked.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``cb.toggled.connect(self._on_update_egg_chart_clicked)``.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_egg_chart()``.
-
-        Updates the UI using widget methods such as: ``setText``, ``setChart``.
-        """
-        
         if not hasattr(api, "get_egg_chart"):
             self.lbl_egg_chart_info.setText("TODO: implement api.get_egg_chart(...)")
             self.egg_chart_view.setChart(QChart())
@@ -1026,23 +982,7 @@ class PokedexWindow(QWidget):
             self.lbl_egg_chart_info.setText(f"Error: {e}")
             self.egg_chart_view.setChart(QChart())
 
-        
     def _on_update_stat_histogram(self) -> None:
-        """
-        On update stat histogram.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.hist_chk_forms_enable.toggled.connect(self._on_update_stat_histogram); cb.toggled.connect(self._on_update_stat_histogram)``.
-        Also connected from other signals (4 total).
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_stat_histogram()``.
-
-        Updates the UI using widget methods such as: ``setText``, ``setChart``.
-        """
-
         if not hasattr(self, "hist_chart_view"):
             return
 
@@ -1121,14 +1061,6 @@ class PokedexWindow(QWidget):
     # -------------------------------------------------------------------------
 
     def _clear_ability_details(self) -> None:
-        """
-        Clear ability details.
-
-        Helper method used by the UI layer.
-
-        Updates the UI using widget methods such as: ``setText``, ``setChart``.
-        """
-
         if hasattr(self, "lbl_ability_desc_stats"):
             self.lbl_ability_desc_stats.setText("—")
 
@@ -1142,22 +1074,7 @@ class PokedexWindow(QWidget):
         if hasattr(self, "lbl_ability_gen_chart_info"):
             self.lbl_ability_gen_chart_info.setText("—")
 
-        
     def _on_update_ability_details(self) -> None:
-        """
-        On update ability details.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.ability_search.returnPressed.connect(self._on_update_ability_details)``.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_ability_description()``, ``api.get_ability_gen_chart()``, ``api.get_ability_type_chart()``.
-
-        Updates the UI using widget methods such as: ``setText``, ``setChart``.
-        """
-
         ability_text = (
             self.ability_search.text().strip()
             if hasattr(self, "ability_search")
@@ -1227,16 +1144,7 @@ class PokedexWindow(QWidget):
     # Items (NOW: Pokédex > Items)
     # -------------------------------------------------------------------------
 
-        
     def _clear_item_details(self) -> None:
-        """
-        Clear item details.
-
-        Helper method used by the UI layer.
-
-        Updates the UI using widget methods such as: ``setText``, ``setPixmap``.
-        """
-
         if hasattr(self, "lbl_item_name"):
             self.lbl_item_name.setText("—")
         if hasattr(self, "lbl_item_desc"):
@@ -1245,22 +1153,7 @@ class PokedexWindow(QWidget):
             self.lbl_item_image.setPixmap(QPixmap())
             self.lbl_item_image.setText("—")
 
-        
     def _on_update_item_details(self) -> None:
-        """
-        On update item details.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.item_search.returnPressed.connect(self._on_update_item_details)``.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_item()``.
-
-        Updates the UI using widget methods such as: ``setText``, ``setPixmap``.
-        """
-
         item_text = (
             self.item_search.text().strip() if hasattr(self, "item_search") else ""
         )
@@ -1303,7 +1196,6 @@ class PokedexWindow(QWidget):
     # Pie renderer (includes readability tweaks for few slices)
     # -------------------------------------------------------------------------
 
-        
     def _render_pie_chart(
         self,
         chart_view: QChartView,
@@ -1312,30 +1204,6 @@ class PokedexWindow(QWidget):
         info_label: QLabel,
     ) -> None:
         series = QPieSeries()
-
-        """
-        Render pie chart.
-
-        Render chart data into a Qt chart view.
-
-        Updates the UI using widget methods such as: ``setText``, ``setChart``, ``setVisible``.
-
-        Parameters
-        ----------
-        chart_view: Any
-            Value provided by Qt (signal) or by the caller.
-        chart_data: Any
-            Value provided by Qt (signal) or by the caller.
-        title_fallback: Any
-            Value provided by Qt (signal) or by the caller.
-        info_label: Any
-            Value provided by Qt (signal) or by the caller.
-
-        Notes
-        -----
-        Adjusts label placement for readability: for few slices, labels are placed inside the pie; otherwise labels are placed outside with leader lines.
-        """
-        
 
         labels = getattr(chart_data, "labels", []) or []
         values = getattr(chart_data, "values", []) or []
@@ -1427,7 +1295,6 @@ class PokedexWindow(QWidget):
         else:
             info_label.setText(meta_text or "—")
 
-        
     def _render_histogram_chart(
         self,
         chart_view: QChartView,
@@ -1435,30 +1302,6 @@ class PokedexWindow(QWidget):
         title_fallback: str,
         info_label: QLabel,
     ) -> None:
-        
-        """
-        Render histogram chart.
-
-        Render chart data into a Qt chart view.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_pokemon()``.
-
-        Updates the UI using widget methods such as: ``setText``, ``setChart``, ``setVisible``.
-
-        Parameters
-        ----------
-        chart_view: Any
-            Value provided by Qt (signal) or by the caller.
-        chart_data: Any
-            Value provided by Qt (signal) or by the caller.
-        title_fallback: Any
-            Value provided by Qt (signal) or by the caller.
-        info_label: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         labels = getattr(chart_data, "labels", []) or []
         values = getattr(chart_data, "values", []) or []
         total = getattr(chart_data, "total", None)
@@ -1631,8 +1474,7 @@ class PokedexWindow(QWidget):
         """Save the current histogram chart as an image file (PNG/JPG)."""
         if not hasattr(self, "hist_chart_view"):
             return
-        
-        
+
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Save histogram chart",
@@ -1649,24 +1491,9 @@ class PokedexWindow(QWidget):
     # Language bar
     # -------------------------------------------------------------------------
 
-        
     def _build_language_bar(self, layout: QHBoxLayout):
         layout.addWidget(QLabel("Language:"))
         self._lang_buttons: list[QToolButton] = []
-
-        """
-        Build language bar.
-
-        Build and lay out widgets for this UI section.
-
-        Updates the UI using widget methods such as: ``setText``, ``addWidget``.
-
-        Parameters
-        ----------
-        layout: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         for lang_id, display in self._official_langs:
             btn = QToolButton()
             btn.setText(display)
@@ -1682,24 +1509,7 @@ class PokedexWindow(QWidget):
 
         layout.addStretch()
 
-        
     def _on_language_selected(self, lang_id: int):
-
-        """
-        On language selected.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by a Qt signal (button click, text input, or selection change).
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Parameters
-        ----------
-        lang_id: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-        
         if self.current_language_id == lang_id:
             return
 
@@ -1731,16 +1541,7 @@ class PokedexWindow(QWidget):
     # Top autocomplete (Pokémon names)
     # -------------------------------------------------------------------------
 
-        
     def _init_pokemon_autocomplete(self):
-
-        """
-        Init pokemon autocomplete.
-
-        Initialize models, completers, or reusable UI resources.
-
-        Updates the UI using widget methods such as: ``setCompleter``.
-        """
         all_names = self._get_all_pokemon_names()
         self._all_pokemon_names = sorted(set(all_names), key=str.casefold)
 
@@ -1754,34 +1555,10 @@ class PokedexWindow(QWidget):
         self.input_name.setCompleter(self._pokemon_completer)
         self.input_name.textEdited.connect(self._on_pokemon_search_text_edited)
 
-        
     def _get_all_pokemon_names(self) -> list[str]:
-        """
-        Get all pokemon names.
-
-        Return data used by the UI (localized when available).
-        """
-
         return self._get_all_names()
 
-        
     def _on_pokemon_search_text_edited(self, text: str):
-
-        """
-        On pokemon search text edited.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.input_name.textEdited.connect(self._on_pokemon_search_text_edited)``.
-
-        Updates the UI using widget methods such as: ``setStringList``.
-
-        Parameters
-        ----------
-        text: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         pattern = text.strip().casefold()
         if not pattern:
             self._pokemon_completer_model.setStringList([])
@@ -1793,7 +1570,6 @@ class PokedexWindow(QWidget):
         ]
         self._pokemon_completer_model.setStringList(matches[:10])
 
-        
     def _get_all_names(
         self,
         names_df=pokemon_species_names_df,
@@ -1802,30 +1578,6 @@ class PokedexWindow(QWidget):
         name_col="name",
         base_identifier_col="identifier",
     ) -> list[str]:
-        
-        """
-        Get all names.
-
-        Return data used by the UI (localized when available).
-
-        Parameters
-        ----------
-        names_df: Any
-            Value provided by Qt (signal) or by the caller.
-        base_df: Any
-            Value provided by Qt (signal) or by the caller.
-        lang_col: Any
-            Value provided by Qt (signal) or by the caller.
-        name_col: Any
-            Value provided by Qt (signal) or by the caller.
-        base_identifier_col: Any
-            Value provided by Qt (signal) or by the caller.
-
-        Notes
-        -----
-        Filters ``names_df`` by ``current_language_id``. If no localized names are available, falls back to the base identifiers from ``base_df``.
-        """
-
         lang = self.current_language_id
         df = names_df[names_df[lang_col] == lang]
         if df.empty:
@@ -1842,18 +1594,7 @@ class PokedexWindow(QWidget):
     # Data loading (Pokédex tab)
     # -------------------------------------------------------------------------
 
-        
     def _on_load_clicked(self):
-        """
-        On load clicked.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.btn_load.clicked.connect(self._on_load_clicked); self.input_name.returnPressed.connect(self._on_load_clicked)``.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-        """
-
         ident = self.input_name.text().strip()
         if not ident:
             QMessageBox.warning(
@@ -1863,21 +1604,7 @@ class PokedexWindow(QWidget):
         self.current_identifier = ident
         self._load_pokemon_data(identifier=ident, form=None)
 
-        
     def _on_form_changed(self, form_text: str):
-        """
-        On form changed.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.form_combo.currentTextChanged.connect(self._on_form_changed)``.
-
-        Parameters
-        ----------
-        form_text: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         if not self.current_identifier:
             return
         self._load_pokemon_data(
@@ -1885,25 +1612,7 @@ class PokedexWindow(QWidget):
         )
 
     def _load_pokemon_data(self, identifier: str, form: str | None):
-
-        """
-        Load pokemon data.
-
-        Helper method used by the UI layer.
-
-        Uses the data provider API via: ``api.get_pokemon()``.
-
-        Updates the UI using widget methods such as: ``setEnabled``.
-
-        Parameters
-        ----------
-        identifier: Any
-            Value provided by Qt (signal) or by the caller.
-        form: Any
-            Value provided by Qt (signal) or by the caller.
-        """
         """Call API and bind to UI; always pass current language_id."""
-
         try:
             data = api.get_pokemon(
                 identifier, form=form, language_id=self.current_language_id
@@ -1940,21 +1649,7 @@ class PokedexWindow(QWidget):
     # Pokédex binders
     # -------------------------------------------------------------------------
 
-        
     def _bind_header(self, data: dict):
-        """
-        Bind header.
-
-        Bind domain data into widgets in the Pokédex tab.
-
-        Updates the UI using widget methods such as: ``setText``, ``setPixmap``.
-
-        Parameters
-        ----------
-        data: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         name = data.get("name", "Unknown")
         dex = data.get("dex_number", "—")
         self.lbl_name.setText(f"<b>{name}</b>")
@@ -1968,23 +1663,8 @@ class PokedexWindow(QWidget):
         else:
             self.lbl_sprite.setPixmap(pm)
             self.lbl_sprite.setText("")
-    
+
     def _bind_types(self, types: list):
-        """
-        Bind types.
-
-        Bind domain data into widgets in the Pokédex tab. Show types as icons, expects numeric ids or strings.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Updates the UI using widget methods such as: ``setText``, ``setPixmap``, ``addWidget``.
-
-        Parameters
-        ----------
-        types: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         while self.types_row.count() > 0:
             item = self.types_row.takeAt(0)
             w = item.widget()
@@ -2012,42 +1692,14 @@ class PokedexWindow(QWidget):
 
         self.types_row.addStretch()
 
-        
     def _bind_stats(self, stats: dict):
-        """
-        Bind stats.
-
-        Bind domain data into widgets in the Pokédex tab.
-
-        Updates the UI using widget methods such as: ``setText``.
-
-        Parameters
-        ----------
-        stats: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         for key, lbl in self.stats_labels.items():
             val = stats.get(key) or stats.get(key.lower()) or "—"
             lbl.setText(str(val))
 
     # ----------------- Evolution display (tree) + click-to-view + item click-to-items -----------------
 
-        
     def _go_to_pokemon(self, identifier: str | int) -> None:
-        """
-        Go to pokemon.
-
-        Helper method used by the UI layer.
-
-        Updates the UI using widget methods such as: ``setText``.
-
-        Parameters
-        ----------
-        identifier: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         ident = str(identifier).strip()
         if not ident:
             return
@@ -2055,22 +1707,7 @@ class PokedexWindow(QWidget):
         self.current_identifier = ident
         self._load_pokemon_data(identifier=ident, form=None)
 
-        
     def _go_to_item_by_name(self, item_name: str) -> None:
-
-        """
-        Go to item by name.
-
-        Helper method used by the UI layer.
-
-        Updates the UI using widget methods such as: ``setText``.
-
-        Parameters
-        ----------
-        item_name: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         name = str(item_name).strip()
         if not name:
             return
@@ -2083,20 +1720,7 @@ class PokedexWindow(QWidget):
             self.item_search.setText(name)
             self._on_update_item_details()
 
-
     def _resolve_item_name_from_sprite(self, item_sprite_path: str) -> str | None:
-
-        """
-        Resolve item name from sprite.
-
-        Helper method used by the UI layer.
-
-        Parameters
-        ----------
-        item_sprite_path: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         try:
             if not item_sprite_path:
                 return None
@@ -2128,23 +1752,7 @@ class PokedexWindow(QWidget):
         except Exception:
             return None
 
-        
     def _bind_evolution_line(self, evo_data):
-        """
-        Bind evolution line.
-
-        Bind domain data into widgets in the Pokédex tab.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Updates the UI using widget methods such as: ``addWidget``.
-
-        Parameters
-        ----------
-        evo_data: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         while self.evo_row.count() > 0:
             item = self.evo_row.takeAt(0)
             w = item.widget()
@@ -2173,28 +1781,9 @@ class PokedexWindow(QWidget):
         self.evo_row.addWidget(root_widget)
         self.evo_row.addStretch()
 
-        
     def _make_evo_pokemon_card(
         self, name: str, image: str | None, dex_no: int | None
     ) -> QWidget:
-        
-        """
-        Make evo pokemon card.
-
-        Create and return a widget used to display a UI element.
-
-        Updates the UI using widget methods such as: ``setText``, ``addWidget``, ``setIcon``, ``setIconSize``.
-
-        Parameters
-        ----------
-        name: Any
-            Value provided by Qt (signal) or by the caller.
-        image: Any
-            Value provided by Qt (signal) or by the caller.
-        dex_no: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         cont = QWidget()
         box = QVBoxLayout(cont)
         box.setContentsMargins(6, 6, 6, 6)
@@ -2234,28 +1823,11 @@ class PokedexWindow(QWidget):
         cont.setMinimumWidth(130)
         return cont
 
-        
     def _make_evo_transition_widget(
         self,
         trigger_value: str | None,
         item_image: str | None,
     ) -> QWidget:
-        
-        """
-        Make evo transition widget.
-
-        Create and return a widget used to display a UI element.
-
-        Updates the UI using widget methods such as: ``setText``, ``addWidget``, ``setIcon``, ``setIconSize``.
-
-        Parameters
-        ----------
-        trigger_value: Any
-            Value provided by Qt (signal) or by the caller.
-        item_image: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         cont = QWidget()
         box = QVBoxLayout(cont)
         box.setContentsMargins(0, 0, 0, 0)
@@ -2281,10 +1853,24 @@ class PokedexWindow(QWidget):
             else:
                 item_btn.setText("—")
 
-            # Prefer trigger_value if it looks like a name; fallback to resolving from sprite identifier
-            item_name = tv if tv and tv != "NaN" else None
-            if not item_name:
-                item_name = self._resolve_item_name_from_sprite(str(item_image))
+            # Trigger_value may include conditions.
+            resolved_item_name = (
+                self._resolve_item_name_from_sprite(str(item_image))
+                if show_item
+                else None
+            )
+
+            # Fallback: try to extract an item name from the trigger text (e.g., "Held: Oval Stone")
+            fallback_item_name = None
+            if not resolved_item_name and tv and tv != "NaN":
+                # common patterns: "Held: X" or plain "X"
+                # keep it conservative: only take the part after "Held:" if present
+                if "held:" in tv.casefold():
+                    fallback_item_name = tv.split(":", 1)[-1].strip()
+                else:
+                    fallback_item_name = tv.strip()
+
+            item_name = resolved_item_name or fallback_item_name
 
             if item_name:
                 item_btn.clicked.connect(
@@ -2305,21 +1891,7 @@ class PokedexWindow(QWidget):
 
         return cont
 
-        
     def _make_evo_subtree_widget(self, node) -> QWidget:
-        """
-        Make evo subtree widget.
-
-        Create and return a widget used to display a UI element.
-
-        Updates the UI using widget methods such as: ``addWidget``.
-
-        Parameters
-        ----------
-        node: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         dex_no = int(getattr(node, "dex_no", 0))
         name = str(getattr(node, "name", "?"))
         image = (
@@ -2383,27 +1955,8 @@ class PokedexWindow(QWidget):
         return cont
 
     # -------- Forms combo: stable (frozen) --------
-        
+
     def _bind_forms(self, identifier: str, data: dict):
-        """
-        Bind forms.
-
-        Bind domain data into widgets in the Pokédex tab.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_available_forms()``.
-
-        Updates the UI using widget methods such as: ``setEnabled``, ``addItem``, ``blockSignals``.
-
-        Parameters
-        ----------
-        identifier: Any
-            Value provided by Qt (signal) or by the caller.
-        data: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         if self._forms_cache_identifier != identifier:
             self._forms_order = []
 
@@ -2442,23 +1995,8 @@ class PokedexWindow(QWidget):
         self.form_combo.blockSignals(False)
 
     # -------- Pokédex flavor --------
-        
+
     def _bind_pokedex_flavor(self, identifier: str):
-        """
-        Bind pokedex flavor.
-
-        Bind domain data into widgets in the Pokédex tab.
-
-        Uses the data provider API via: ``api.get_pokedex_flavor()``.
-
-        Updates the UI using widget methods such as: ``setText``, ``setEnabled``, ``addItem``, ``setCurrentIndex``, ``blockSignals``.
-
-        Parameters
-        ----------
-        identifier: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         self._flavor_versions = []
         self._flavor_texts = []
 
@@ -2504,46 +2042,15 @@ class PokedexWindow(QWidget):
             self.dex_combo.clear()
             self.lbl_flavor.setText("—")
 
-        
     def _on_pokedex_version_changed(self, idx: int):
-        """
-        On pokedex version changed.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.dex_combo.currentIndexChanged.connect(self._on_pokedex_version_changed)``.
-
-        Updates the UI using widget methods such as: ``setText``.
-
-        Parameters
-        ----------
-        idx: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         if not self._flavor_texts:
             return
         if 0 <= idx < len(self._flavor_texts):
             self.lbl_flavor.setText(self._flavor_texts[idx])
 
     # -------- Abilities (Pokémon tab) --------
-        
+
     def _bind_abilities(self, abilities: list[str], hidden_flags: list[bool]) -> None:
-        """
-        Bind abilities.
-
-        Bind domain data into widgets in the Pokédex tab.
-
-        Updates the UI using widget methods such as: ``setText``, ``setEnabled``, ``addItem``, ``setCurrentIndex``, ``blockSignals``.
-
-        Parameters
-        ----------
-        abilities: Any
-            Value provided by Qt (signal) or by the caller.
-        hidden_flags: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         self.ability_combo.blockSignals(True)
         self.ability_combo.clear()
 
@@ -2574,37 +2081,10 @@ class PokedexWindow(QWidget):
 
         self._update_ability_description()
 
-        
     def _on_ability_changed(self, _idx: int):
-        """
-        On ability changed.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.ability_combo.currentIndexChanged.connect(self._on_ability_changed)``.
-
-        Parameters
-        ----------
-        _idx: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         self._update_ability_description()
 
-        
     def _update_ability_description(self) -> None:
-        """
-        Update ability description.
-
-        Helper method used by the UI layer.
-
-        Reads user selections from widgets (e.g., text fields, combos, checkboxes) to compute the new state.
-
-        Uses the data provider API via: ``api.get_ability_description()``.
-
-        Updates the UI using widget methods such as: ``setText``.
-        """
-
         if self.ability_combo.count() == 0:
             self.lbl_ability_desc.setText("—")
             return
@@ -2637,21 +2117,8 @@ class PokedexWindow(QWidget):
             self.lbl_ability_desc.setText(f"Error: {e}")
 
     # -------- Egg groups (Pokémon tab) --------
-        
+
     def _bind_egg_groups(self, egg_groups: list[str]):
-        """
-        Bind egg groups.
-
-        Bind domain data into widgets in the Pokédex tab.
-
-        Updates the UI using widget methods such as: ``setText``, ``setEnabled``.
-
-        Parameters
-        ----------
-        egg_groups: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         egg_groups = [str(e).strip() for e in (egg_groups or []) if str(e).strip()]
         if not egg_groups:
             self.egg_group_box.setEnabled(False)
@@ -2664,16 +2131,7 @@ class PokedexWindow(QWidget):
     # Media
     # -------------------------------------------------------------------------
 
-        
     def _on_play_cry_clicked(self):
-        """
-        On play cry clicked.
-
-        Handle a Qt signal and refresh the corresponding UI state.
-
-        Triggered by: ``self.btn_play_cry.clicked.connect(self._on_play_cry_clicked)``.
-        """
-
         cries = self.current_data.get("cries") or []
         if not cries:
             return
@@ -2681,24 +2139,13 @@ class PokedexWindow(QWidget):
         self.current_cry_index += 1
         self._play_audio(url)
 
-        
     def _play_audio(self, url_or_path: str):
-        """
-        Play audio.
-
-        Play audio content (Pokémon cry) using Qt multimedia.
-
-        Parameters
-        ----------
-        url_or_path: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         try:
-            if url_or_path.startswith(("http://", "https://")):
-                self.player.setSource(QUrl(url_or_path))
+            resolved = _resolve_asset_path(url_or_path)
+            if resolved.startswith(("http://", "https://")):
+                self.player.setSource(QUrl(resolved))
             else:
-                self.player.setSource(QUrl.fromLocalFile(os.path.abspath(url_or_path)))
+                self.player.setSource(QUrl.fromLocalFile(os.path.abspath(resolved)))
             self.audio.setVolume(0.8)
             self.player.play()
         except Exception as e:
@@ -2708,17 +2155,7 @@ class PokedexWindow(QWidget):
     # Statistics catalogs + autocompletes (Items completer now targets Pokédex > Items)
     # -------------------------------------------------------------------------
 
-        
     def _init_statistics_catalogs(self):
-
-        """
-        Init statistics catalogs.
-
-        Initialize models, completers, or reusable UI resources.
-
-        Updates the UI using widget methods such as: ``setCompleter``.
-        """
-
         if hasattr(self, "gen_type_filter_combo"):
             self._fill_chart_type_filter_combo(self.gen_type_filter_combo)
 
@@ -2773,21 +2210,6 @@ class PokedexWindow(QWidget):
             self._on_update_egg_chart_clicked()
 
     def _fetch_catalog_strings(self, api_method_name: str) -> list[str]:
-
-        """
-        Fetch catalog strings.
-
-        Fetch and normalize catalog data for populating UI completers.
-        Accept either:
-          - ["overgrow","blaze"]
-          - [("65","Overgrow"), ("66","Blaze")] -> returns ["Overgrow","Blaze"]
-
-        Parameters
-        ----------
-        api_method_name: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         if not hasattr(api, api_method_name):
             return []
 
@@ -2804,26 +2226,8 @@ class PokedexWindow(QWidget):
             else:
                 out.append(str(it))
         return out
-    
+
     def _fill_chart_type_filter_combo(self, combo: QComboBox) -> None:
-
-        """
-        Fill chart type filter combo.
-
-        Populate a combo box/model with canonical identifiers and localized labels.  
-        Fill a type filter combo where userData must be the canonical type identifier
-        (e.g., "fire", "water"), independent of localized labels.
-
-        Uses the data provider API via: ``api.get_all_types()``.
-
-        Updates the UI using widget methods such as: ``addItem``, ``blockSignals``.
-
-        Parameters
-        ----------
-        combo: Any
-            Value provided by Qt (signal) or by the caller.
-        """
-
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("All types", userData=None)
@@ -2865,15 +2269,12 @@ class PokedexWindow(QWidget):
 # ---- Entrypoint ---------------------------------------------------------------
 
 
-    
 def run():
-
     """
     Run.
 
     Application entrypoint: create the Qt app and start the event loop.
     """
-
     app = QApplication(sys.argv)
     w = PokedexWindow()
     w.show()
