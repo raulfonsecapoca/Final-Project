@@ -27,7 +27,7 @@ from PySide6.QtCharts import (
     QPieSlice,
     QValueAxis,
 )
-from PySide6.QtCore import QMargins, QSize, QStringListModel, Qt, QUrl
+from PySide6.QtCore import QMargins, QSize, QStringListModel, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -52,7 +52,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pokedex.pokedex_core import PokedexAPI as api  # your data provider
+from pokedex.pokedex_core import PokedexAPI as api  # data provider
 
 # ---- CSVs for language metadata + localized Pokémon names (autocomplete) ------
 
@@ -233,10 +233,13 @@ class AutoPixmapLabel(QLabel):
     while keeping aspect ratio. Useful for responsive UIs.
     """
 
+    scaledPixmapChanged = Signal()
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._src_pixmap = QPixmap()
         self._min_side = 160
+        self._last_scaled_size: tuple[int, int] | None = None
 
     def setSourcePixmap(self, pixmap: QPixmap) -> None:
         self._src_pixmap = pixmap if pixmap else QPixmap()
@@ -252,8 +255,8 @@ class AutoPixmapLabel(QLabel):
 
     def _update_scaled(self) -> None:
         if self._src_pixmap.isNull():
-            # Do not overwrite text; caller controls placeholder text.
             super().setPixmap(QPixmap())
+            self._last_scaled_size = None
             return
 
         w = max(self.width(), self._min_side)
@@ -265,6 +268,11 @@ class AutoPixmapLabel(QLabel):
             Qt.TransformationMode.SmoothTransformation,
         )
         super().setPixmap(scaled)
+
+        new_size = (scaled.width(), scaled.height())
+        if new_size != self._last_scaled_size:
+            self._last_scaled_size = new_size
+            self.scaledPixmapChanged.emit()
 
 
 # ---- Main Window --------------------------------------------------------------
@@ -298,6 +306,12 @@ class PokedexWindow(QWidget):
         self.current_identifier: str | None = None
         self.current_data: dict = {}
         self.current_cry_index: int = 0
+
+        # Types image
+        self._type_icon_labels: list[tuple[QLabel, QPixmap]] = []
+        self._type_rescale_timer = QTimer(self)
+        self._type_rescale_timer.setSingleShot(True)
+        self._type_rescale_timer.timeout.connect(self._rescale_type_icons)
 
         # Pokédex flavor state
         self._flavor_versions: list[str] = []
@@ -421,6 +435,7 @@ class PokedexWindow(QWidget):
         self.lbl_sprite.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_sprite.setFrameShape(QFrame.Shape.Panel)
         self.lbl_sprite.setFrameShadow(QFrame.Shadow.Sunken)
+        self.lbl_sprite.scaledPixmapChanged.connect(self._schedule_type_rescale)
 
         # Responsive sprite sizing
         self.lbl_sprite.setMinimumSize(220, 220)
@@ -731,7 +746,9 @@ class PokedexWindow(QWidget):
         gen_layout = QVBoxLayout()
         gen_layout.addLayout(gen_filter_row)
         gen_layout.addWidget(self.gen_chart_view, 1)
-        self._add_save_chart_button(gen_layout, self.gen_chart_view, "generation_chart.png")
+        self._add_save_chart_button(
+            gen_layout, self.gen_chart_view, "generation_chart.png"
+        )
         gen_layout.addWidget(self.lbl_gen_chart_info)
         gen_box.setLayout(gen_layout)
 
@@ -839,7 +856,9 @@ class PokedexWindow(QWidget):
         layout.addWidget(self.hist_chart_view, 1)
 
         # Save button directly under the chart (uses the global helper)
-        self._add_save_chart_button(layout, self.hist_chart_view, "pokemon_histogram.png")
+        self._add_save_chart_button(
+            layout, self.hist_chart_view, "pokemon_histogram.png"
+        )
 
         self.hist_group.setLayout(layout)
 
@@ -961,7 +980,9 @@ class PokedexWindow(QWidget):
         self.lbl_ability_type_chart_info = QLabel("—")
         self.lbl_ability_type_chart_info.setWordWrap(True)
         left_layout.addWidget(self.ability_type_chart_view, 1)
-        self._add_save_chart_button(left_layout, self.ability_type_chart_view, "ability_type_chart.png")
+        self._add_save_chart_button(
+            left_layout, self.ability_type_chart_view, "ability_type_chart.png"
+        )
         left_layout.addWidget(self.lbl_ability_type_chart_info)
 
         right_box = QGroupBox("Generation Chart")
@@ -971,7 +992,9 @@ class PokedexWindow(QWidget):
         self.lbl_ability_gen_chart_info = QLabel("—")
         self.lbl_ability_gen_chart_info.setWordWrap(True)
         right_layout.addWidget(self.ability_gen_chart_view, 1)
-        self._add_save_chart_button(right_layout, self.ability_gen_chart_view, "ability_gen_chart.png")
+        self._add_save_chart_button(
+            right_layout, self.ability_gen_chart_view, "ability_gen_chart.png"
+        )
         right_layout.addWidget(self.lbl_ability_gen_chart_info)
 
         charts_row.addWidget(left_box, 1)
@@ -994,6 +1017,14 @@ class PokedexWindow(QWidget):
     # -------------------------------------------------------------------------
     # Charts handlers
     # -------------------------------------------------------------------------
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._schedule_type_rescale()
+
+    def _schedule_type_rescale(self) -> None:
+        # Run after the sprite pixmap has actually updated
+        QTimer.singleShot(0, self._rescale_type_icons)
 
     def _on_update_type_chart_clicked(self) -> None:
         if not hasattr(api, "get_type_chart"):
@@ -1560,13 +1591,14 @@ class PokedexWindow(QWidget):
 
         info_label.setText("\n".join(lines))
 
-    def _add_save_chart_button(self, parent_layout, chart_view: QChartView, default_name: str):
+    def _add_save_chart_button(
+        self, parent_layout, chart_view: QChartView, default_name: str
+    ):
         """Add a 'Save chart…' button under a QChartView and wire it to export the chart image."""
         btn = QPushButton("Save chart…")
         parent_layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignRight)
 
         def on_save_clicked():
-            
             filename, _ = QFileDialog.getSaveFileName(
                 self,
                 "Save chart",
@@ -1579,7 +1611,6 @@ class PokedexWindow(QWidget):
 
         btn.clicked.connect(on_save_clicked)
         return btn
-
 
     # -------------------------------------------------------------------------
     # Language bar
@@ -1774,7 +1805,11 @@ class PokedexWindow(QWidget):
             self.lbl_sprite.setText("")
             self.lbl_sprite.setSourcePixmap(pm)
 
+        self._rescale_type_icons()
+        QTimer.singleShot(0, self._rescale_type_icons)
+
     def _bind_types(self, types: list):
+        # Clear layout widgets
         while self.types_row.count() > 0:
             item = self.types_row.takeAt(0)
             w = item.widget()
@@ -1783,11 +1818,8 @@ class PokedexWindow(QWidget):
 
         self.types_row.addStretch()
 
-        # Responsive icon size: based on sprite height (clamped)
-        try:
-            icon_px = max(36, min(72, int(self.lbl_sprite.height() * 0.18)))
-        except Exception:
-            icon_px = 48
+        # Reset cache
+        self._type_icon_labels.clear()
 
         for t in types:
             try:
@@ -1799,20 +1831,43 @@ class PokedexWindow(QWidget):
 
             icon_path = TYPE_ICON_DIR / f"{type_id}.png"
             lbl = QLabel()
-            pm = QPixmap(str(icon_path))
-            if pm.isNull():
+
+            src_pm = QPixmap(str(icon_path))
+            if src_pm.isNull():
                 lbl.setText(str(type_id))
             else:
+                # Set a first scaled pixmap (will be rescaled again below)
+                lbl.setPixmap(src_pm)
+                self._type_icon_labels.append((lbl, src_pm))
+
+            self.types_row.addWidget(lbl)
+
+        self.types_row.addStretch()
+
+        # Apply proper scaling once after creation
+        self._rescale_type_icons()
+
+    def _rescale_type_icons(self) -> None:
+        if not getattr(self, "_type_icon_labels", None):
+            return
+
+        pm = self.lbl_sprite.pixmap()
+        if pm is None or pm.isNull():
+            return
+
+        side = min(pm.width(), pm.height())
+        icon_px = int(max(56, min(128, side * 0.30)))
+
+        size = QSize(icon_px, icon_px)
+        for lbl, src_pm in self._type_icon_labels:
+            if not src_pm.isNull():
                 lbl.setPixmap(
-                    pm.scaled(
-                        QSize(icon_px, icon_px),
+                    src_pm.scaled(
+                        size,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
                 )
-            self.types_row.addWidget(lbl)
-
-        self.types_row.addStretch()
 
     def _bind_stats(self, stats: dict):
         for key, lbl in self.stats_labels.items():
