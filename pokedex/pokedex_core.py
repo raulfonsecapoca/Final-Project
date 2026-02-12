@@ -242,6 +242,24 @@ class PokedexAPI:
                 pokemon = pokemon_species_df[
                     pokemon_species_df["identifier"].str.lower() == identifier.lower()
                 ]
+                if pokemon.empty:
+                    name_rows = pokemon_species_names_df[
+                        (
+                            pokemon_species_names_df["name"].astype(str).str.casefold()
+                            == identifier.strip().casefold()
+                        )
+                        & (
+                            pokemon_species_names_df["local_language_id"].isin(
+                                [language_id, 9]
+                            )
+                        )
+                    ]
+                    if not name_rows.empty:
+                        species_id = int(name_rows.iloc[0]["pokemon_species_id"])
+                        pokemon = pokemon_species_df[
+                            pokemon_species_df["id"] == species_id
+                        ]
+
         else:
             pokemon = pokemon_species_df[pokemon_species_df["id"] == identifier]
             dex = pokemon["id"].values[0] if not pokemon.empty else None
@@ -249,15 +267,26 @@ class PokedexAPI:
         if pokemon.empty:
             raise ValueError(f"Pokémon '{identifier}' not found")
 
+        # From pokemon_species_df
+        species_id = int(pokemon.iloc[0]["id"])
+
+        # all forms for this species (from pokemon_df)
+        forms_df = pokemon_df[pokemon_df["species_id"] == species_id].sort_values("id")
+        if forms_df.empty:
+            raise ValueError(f"Pokémon '{identifier}' not found in pokemon_df")
+
+        # If a specific form selected
         if form is not None:
-            pokemon = pokemon_df[pokemon_df["identifier"].str.lower() == form]
-            if pokemon.empty:
+            form_key = str(form).strip().casefold()
+            forms_df = forms_df[
+                forms_df["identifier"].astype(str).str.casefold() == form_key
+            ]
+            if forms_df.empty:
                 raise ValueError(f"Pokémon '{identifier}' with form '{form}' not found")
 
-        p = pokemon.iloc[0]
-        p = pokemon_df[pokemon_df["id"] == p["id"]].iloc[0]
-        pokemon_id = p["id"]
-        pokemon_dexNum = p["species_id"]
+        p = forms_df.iloc[0]
+        pokemon_id = int(p["id"])
+        pokemon_dexNum = int(p["species_id"])  # equals species_id
 
         pokemon_types_list = pokemon_types_df[
             pokemon_types_df["pokemon_id"] == pokemon_id
@@ -267,7 +296,7 @@ class PokedexAPI:
             ["stat_id", "base_stat"]
         ]
 
-        # Evolution chain
+        # Evolution chain (get the first pokemon of its evolution line)
         evolution_chain_id = pokemon_species_df[
             pokemon_species_df["id"] == pokemon_dexNum
         ]["evolution_chain_id"].values[0]
@@ -343,6 +372,7 @@ class PokedexAPI:
         return {
             "name": pokemon_localized_name,
             "dex_number": p["species_id"],
+            "id": p["id"],
             # "image": f"data/sprites/sprites/pokemon/{int(p['id'])}.png",
             "image": f"data/sprites/sprites/pokemon/other/home/{int(p['id'])}.png",
             "cries": [f"data/cries/cries/pokemon/latest/{int(p['id'])}.ogg"],
@@ -683,6 +713,15 @@ class PokedexAPI:
         Notes
         -----
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
+
+        Some abilities share the same display name but have distinct flavor texts depending
+        on the Pokémon form (e.g., Calyrex Ice Rider vs. Calyrex Shadow Rider). Since the
+        current implementation resolves abilities by name only, it may return the first
+        matching description found, potentially ignoring form-specific variations.
+
+        TODO: Improve resolution logic to distinguish abilities with identical names
+        but form-dependent descriptions.
+
         """
 
         ability_str = str(ability).strip()
@@ -857,6 +896,9 @@ class PokedexAPI:
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
         """
 
+        if type_filter is not None and language_id != 9:
+            type_filter = PokedexAPI._get_type_name_english(type_filter, language_id)
+
         if type_filter is None:
             type_id_filter = None
         else:
@@ -878,6 +920,7 @@ class PokedexAPI:
             ]["pokemon_id"].tolist()
 
         pokemon_df_filtered = pokemon_df[pokemon_df["id"].isin(pokemon_filtered)]
+
         pokemon_species_df_filtered = pokemon_species_df[
             pokemon_species_df["id"].isin(pokemon_filtered)
         ]
@@ -1072,6 +1115,8 @@ class PokedexAPI:
         -----
         When localized text is unavailable for ``language_id``, the implementation falls back to English (language id 9).
         """
+        if type_filter is not None and language_id != 9:
+            type_filter = PokedexAPI._get_type_name_english(type_filter, language_id)
 
         if generations_enable is None:
             generations_enable = [True] * 9
@@ -1237,6 +1282,12 @@ class PokedexAPI:
 
         Compute a generation distribution chart restricted to Pokémon that have the given ability.
 
+        The generation distribution is computed at the species level. Alternative forms
+        (e.g., Mega Evolutions or other form variants) are not displayed separately in
+        the chart slices. However, such forms are still included in the total number of
+        Pokémon counted for the selected ability.
+        TODO: Display diferents forms in the chart. (Maybe as unknown generation).
+
         Reads from: ``ability_names_df``, ``generation_names_df``, ``pokemon_abilities_df``, ``pokemon_df``, ``pokemon_species_df``.
 
         Uses common pandas/numpy operations such as: ``value_counts``, ``to_dict``, ``tolist``, ``isin``, ``unique``.
@@ -1308,7 +1359,7 @@ class PokedexAPI:
         labels = out
 
         values = list(count_by_gen.values())
-        total = pokemon_df_filtered["species_id"].nunique()
+        total = pokemon_df_filtered["id"].nunique()
 
         return ChartData(
             title="Generation Chart - Ability: " + ability_str,
@@ -1436,6 +1487,9 @@ class PokedexAPI:
             ChartData: labels are bin ranges, values are counts, meta includes selected marker + rank info.
         """
 
+        if type_filter is not None and language_id != 9:
+            type_filter = PokedexAPI._get_type_name_english(type_filter, language_id)
+
         if generations_enable is None:
             generations_enable = [True] * 9
 
@@ -1522,6 +1576,7 @@ class PokedexAPI:
                     "stat_key": stat_key_clean,
                     "stat_id": str(stat_id),
                     "selected_identifier": str(identifier),
+                    "form_name": "None",
                     "selected_pokemon_id": "None",
                     "selected_value": "None",
                     "selected_bin_index": "None",
@@ -1536,10 +1591,15 @@ class PokedexAPI:
                         ["1" if x else "0" for x in generations_enable]
                     ),
                     "language_id": str(language_id),
+                    "mean": "None",
+                    "std": "None",
                 },
             )
 
         values = stat_values_df["base_stat"].astype(int).to_numpy()
+
+        mean_value = float(values.mean()) if values.size else 0.0
+        std_value = float(values.std(ddof=0)) if values.size else 0.0
 
         vmin = int(values.min())
         vmax = int(values.max())
@@ -1565,20 +1625,47 @@ class PokedexAPI:
             else:
                 labels.append(f"{left}–{right}")
 
-        # Resolve selected pokemon_id (species identifier or name; optional explicit form)
+        # Resolve species_row from identifier (dex number, canonical identifier, or localized name)
         selected_pokemon_id: int | None = None
+
+        species_row = pokemon_species_df.iloc[0:0]  # empty default
+
         if isinstance(identifier, str):
+            ident_str = identifier.strip()
             try:
-                dex = int(identifier)
+                dex = int(ident_str)
                 species_row = pokemon_species_df[pokemon_species_df["id"] == dex]
             except ValueError:
+                # 1) English (standart: pokemon_species_df)
                 species_row = pokemon_species_df[
                     pokemon_species_df["identifier"].astype(str).str.casefold()
-                    == identifier.casefold()
+                    == ident_str.casefold()
                 ]
-        else:
-            species_row = pokemon_species_df[pokemon_species_df["id"] == identifier]
 
+                # 2) localized name fallback (language_id or english=9)
+                if species_row.empty:
+                    name_rows = pokemon_species_names_df[
+                        (
+                            pokemon_species_names_df["name"].astype(str).str.casefold()
+                            == ident_str.casefold()
+                        )
+                        & (
+                            pokemon_species_names_df["local_language_id"].isin(
+                                [language_id, 9]
+                            )
+                        )
+                    ]
+                    if not name_rows.empty:
+                        species_id = int(name_rows.iloc[0]["pokemon_species_id"])
+                        species_row = pokemon_species_df[
+                            pokemon_species_df["id"] == species_id
+                        ]
+        else:
+            species_row = pokemon_species_df[
+                pokemon_species_df["id"] == int(identifier)
+            ]
+
+        form_name = ""
         if not species_row.empty:
             dex_num = int(species_row["id"].iloc[0])
 
@@ -1589,6 +1676,9 @@ class PokedexAPI:
                 ]
                 if not form_row.empty:
                     selected_pokemon_id = int(form_row["id"].iloc[0])
+                    form_name = str(form_row["identifier"].iloc[0])
+                else:
+                    form_name = str(form).strip()
             else:
                 base_row = pokemon_df[pokemon_df["species_id"] == dex_num].sort_values(
                     "id"
@@ -1634,7 +1724,6 @@ class PokedexAPI:
                     higher_count = int((base_stats_series > selected_value).sum())
                     selected_rank = higher_count + 1
                     tied_with = int((base_stats_series == selected_value).sum())
-
         return ChartData(
             title=f"Histogram - {stat_key_clean}",
             labels=labels,
@@ -1647,6 +1736,7 @@ class PokedexAPI:
                 "bins": str(len(counts)),
                 "bin_edges": ",".join([str(float(x)) for x in bin_edges.tolist()]),
                 "selected_identifier": str(identifier),
+                "form_name": str(form_name),
                 "selected_pokemon_id": str(selected_pokemon_id)
                 if selected_pokemon_id is not None
                 else "None",
@@ -1667,6 +1757,8 @@ class PokedexAPI:
                     ["1" if x else "0" for x in generations_enable]
                 ),
                 "language_id": str(language_id),
+                "mean": f"{mean_value:.3f}",
+                "std": f"{std_value:.3f}",
             },
         )
 
@@ -1788,3 +1880,41 @@ class PokedexAPI:
                 return name
 
         return str(lid)
+
+    @staticmethod
+    def _get_type_name_english(
+        type_localized: str | None, language_id: int
+    ) -> str | None:
+        """
+        Convert a localized type name (in `language_id`) into the English type name (language_id=9).
+        Returns None if not found.
+        """
+        if not type_localized:
+            return None
+
+        src = str(type_localized).strip()
+        if not src:
+            return None
+
+        match_local = type_names_df[
+            (type_names_df["local_language_id"] == int(language_id))
+            & (type_names_df["name"].astype(str).str.casefold() == src.casefold())
+        ]
+
+        if match_local.empty:
+            return None
+
+        try:
+            type_id = int(match_local["type_id"].iloc[0])
+        except Exception:
+            return None
+
+        match_en = type_names_df[
+            (type_names_df["local_language_id"] == 9)
+            & (type_names_df["type_id"] == type_id)
+        ]
+
+        if match_en.empty:
+            return None
+
+        return str(match_en["name"].iloc[0]).strip() or None

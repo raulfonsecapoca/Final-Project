@@ -229,8 +229,8 @@ def _enable_antialiasing(chart_view: QChartView) -> None:
 
 class AutoPixmapLabel(QLabel):
     """
-    QLabel that automatically scales a source pixmap to its current size
-    while keeping aspect ratio. Useful for responsive UIs.
+    QLabel that scales a source pixmap to the widget's current size
+    while keeping aspect ratio, without causing layout feedback loops.
     """
 
     scaledPixmapChanged = Signal()
@@ -238,20 +238,27 @@ class AutoPixmapLabel(QLabel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._src_pixmap = QPixmap()
-        self._min_side = 160
         self._last_scaled_size: tuple[int, int] | None = None
+
+        # Important: don't let the pixmap drive the widget's size
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+
+        # Coalesce resize bursts
+        self._rescale_timer = QTimer(self)
+        self._rescale_timer.setSingleShot(True)
+        self._rescale_timer.timeout.connect(self._update_scaled)
 
     def setSourcePixmap(self, pixmap: QPixmap) -> None:
         self._src_pixmap = pixmap if pixmap else QPixmap()
-        self._update_scaled()
-
-    def setMinimumSide(self, px: int) -> None:
-        self._min_side = max(1, int(px))
-        self._update_scaled()
+        self._schedule_update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._update_scaled()
+        self._schedule_update()
+
+    def _schedule_update(self) -> None:
+        # 0 ms coalesces multiple resize events into one update per event loop tick
+        self._rescale_timer.start(0)
 
     def _update_scaled(self) -> None:
         if self._src_pixmap.isNull():
@@ -259,8 +266,8 @@ class AutoPixmapLabel(QLabel):
             self._last_scaled_size = None
             return
 
-        w = max(self.width(), self._min_side)
-        h = max(self.height(), self._min_side)
+        w = max(1, self.width())
+        h = max(1, self.height())
 
         scaled = self._src_pixmap.scaled(
             QSize(w, h),
@@ -306,6 +313,11 @@ class PokedexWindow(QWidget):
         self.current_identifier: str | None = None
         self.current_data: dict = {}
         self.current_cry_index: int = 0
+        self.current_species_id: int | None = None
+        self.current_form_identifier: str | None = None
+        self._force_base_form_select: bool = False
+        self.is_shiny = False
+        self.current_pokemon_id: int | None = None
 
         # Types image
         self._type_icon_labels: list[tuple[QLabel, QPixmap]] = []
@@ -442,7 +454,25 @@ class PokedexWindow(QWidget):
         self.lbl_sprite.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        self.lbl_sprite.setMinimumSide(220)
+
+        # --- Shiny overlay button (on top of the sprite) ---
+        self.btn_shiny = QToolButton(self.lbl_sprite)
+        self.btn_shiny.setCheckable(True)
+        self.btn_shiny.setAutoRaise(True)
+        self.btn_shiny.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_shiny.setToolTip("Toggle Shiny")
+        self.btn_shiny.setFixedSize(28, 28)
+        self.btn_shiny.setText("✨")
+
+        # Transparent look
+        self.btn_shiny.setStyleSheet(
+            "QToolButton { background: transparent; border: none; font-size: 18px; }"
+            "QToolButton:checked { font-weight: bold; }"
+        )
+
+        self.btn_shiny.clicked.connect(self._on_shiny_toggled)
+
+        self._position_shiny_button()
 
         self.lbl_name = QLabel("<b>Name</b>")
         self.lbl_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1021,14 +1051,14 @@ class PokedexWindow(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._schedule_type_rescale()
+        self._position_shiny_button()
 
     def _schedule_type_rescale(self) -> None:
-        # Run after the sprite pixmap has actually updated
-        QTimer.singleShot(0, self._rescale_type_icons)
+        self._type_rescale_timer.start(0)
 
     def _on_update_type_chart_clicked(self) -> None:
         if not hasattr(api, "get_type_chart"):
-            self.lbl_type_chart_info.setText("TODO: implement api.get_type_chart(...)")
+            self.lbl_type_chart_info.setText("Missing: api.get_type_chart(...)")
             self.type_chart_view.setChart(QChart())
             return
 
@@ -1053,7 +1083,7 @@ class PokedexWindow(QWidget):
 
     def _on_update_gen_chart_clicked(self) -> None:
         if not hasattr(api, "get_gen_chart"):
-            self.lbl_gen_chart_info.setText("TODO: implement api.get_gen_chart(...)")
+            self.lbl_gen_chart_info.setText("Missing: api.get_gen_chart(...)")
             self.gen_chart_view.setChart(QChart())
             return
 
@@ -1080,7 +1110,7 @@ class PokedexWindow(QWidget):
 
     def _on_update_egg_chart_clicked(self) -> None:
         if not hasattr(api, "get_egg_chart"):
-            self.lbl_egg_chart_info.setText("TODO: implement api.get_egg_chart(...)")
+            self.lbl_egg_chart_info.setText("Missing api.get_egg_chart(...)")
             self.egg_chart_view.setChart(QChart())
             return
 
@@ -1108,7 +1138,7 @@ class PokedexWindow(QWidget):
             return
 
         if not hasattr(api, "get_stat_histogram"):
-            self.lbl_hist_info.setText("TODO: implement api.get_stat_histogram(...)")
+            self.lbl_hist_info.setText("Missing api.get_stat_histogram(...)")
             self.hist_chart_view.setChart(QChart())
             return
 
@@ -1178,7 +1208,7 @@ class PokedexWindow(QWidget):
             self.hist_chart_view.setChart(QChart())
 
     # -------------------------------------------------------------------------
-    # Abilities subtab handlers
+    # Handlers
     # -------------------------------------------------------------------------
 
     def _clear_ability_details(self) -> None:
@@ -1237,7 +1267,7 @@ class PokedexWindow(QWidget):
                 self.ability_type_chart_view.setChart(QChart())
         else:
             self.lbl_ability_type_chart_info.setText(
-                "TODO: implement api.get_ability_type_chart(...)"
+                "Missing api.get_ability_type_chart(...)"
             )
             self.ability_type_chart_view.setChart(QChart())
 
@@ -1257,12 +1287,12 @@ class PokedexWindow(QWidget):
                 self.ability_gen_chart_view.setChart(QChart())
         else:
             self.lbl_ability_gen_chart_info.setText(
-                "TODO: implement api.get_ability_gen_chart(...)"
+                "Missing api.get_ability_gen_chart(...)"
             )
             self.ability_gen_chart_view.setChart(QChart())
 
     # -------------------------------------------------------------------------
-    # Items (NOW: Pokédex > Items)
+    # Items Page
     # -------------------------------------------------------------------------
 
     def _clear_item_details(self) -> None:
@@ -1485,6 +1515,11 @@ class PokedexWindow(QWidget):
         selected_rank = ""
         rank_total = ""
 
+        form_name = ""
+
+        mean = ""
+        std = ""
+
         if isinstance(meta, dict):
             desc = str(meta.get("description", "")).strip()
             stat_key = str(meta.get("stat_key", "")).strip()
@@ -1493,6 +1528,11 @@ class PokedexWindow(QWidget):
             selected_value = str(meta.get("selected_value", "")).strip()
             selected_rank = str(meta.get("selected_rank", "")).strip()
             rank_total = str(meta.get("rank_total", "")).strip()
+
+            form_name = str(meta.get("form_name", "")).strip()
+
+            mean = str(meta.get("mean", "")).strip()
+            std = str(meta.get("std", "")).strip()
 
         if not stat_key:
             stat_key = title_fallback.replace("Histogram -", "").strip() or "—"
@@ -1571,6 +1611,7 @@ class PokedexWindow(QWidget):
             lines.append(f"Bins: {len(labels)}")
 
         lines.append(f"Selected Pokémon: {selected_name}")
+        lines.append(f"Selected Pokémon Form: {form_name}")
         lines.append(f"Dex #: {selected_dex}")
 
         if selected_value and selected_value != "None":
@@ -1588,6 +1629,9 @@ class PokedexWindow(QWidget):
             lines.append(f"Rank (within filters): {selected_rank} of {rt}")
         else:
             lines.append("Rank (within filters): —")
+
+        lines.append(f"Mean: {mean}")
+        lines.append(f"Std: {std}")
 
         info_label.setText("\n".join(lines))
 
@@ -1672,10 +1716,22 @@ class PokedexWindow(QWidget):
         if hasattr(self, "item_search") and self.item_search.text().strip():
             self._on_update_item_details()
 
-        if self.current_identifier:
-            current_form = self.form_combo.currentText().strip() or None
+        # Keep a stable identifier across language switches for histogram/search
+        if self.current_species_id is not None:
+            self.input_name.setText(str(self.current_species_id))
+
+        form_to_keep = self.current_form_identifier
+        if hasattr(self, "form_combo") and self.form_combo.isEnabled():
+            form_to_keep = self.form_combo.currentText().strip() or form_to_keep
+
+        if self.current_species_id is not None:
             self._load_pokemon_data(
-                identifier=self.current_identifier, form=current_form
+                identifier=self.current_species_id, form=form_to_keep
+            )
+        elif self.current_identifier:
+            # fallback (should be rare once you store current_species_id)
+            self._load_pokemon_data(
+                identifier=self.current_identifier, form=form_to_keep
             )
 
     # -------------------------------------------------------------------------
@@ -1742,19 +1798,22 @@ class PokedexWindow(QWidget):
                 self, "Pokédex", "Please type a Pokémon name or number."
             )
             return
-        self.current_identifier = ident
         self._load_pokemon_data(identifier=ident, form=None)
 
     def _on_form_changed(self, form_text: str):
         if not self.current_identifier:
             return
+        self.current_form_identifier = form_text.strip() or None
         self._load_pokemon_data(
             identifier=self.current_identifier, form=(form_text or None)
         )
 
-    def _load_pokemon_data(self, identifier: str, form: str | None):
+    def _load_pokemon_data(self, identifier: str | int, form: str | None):
         """Call API and bind to UI; always pass current language_id."""
         try:
+            # If form is None, the form combobox selection is reset.
+            self._force_base_form_select = form is None
+
             data = api.get_pokemon(
                 identifier, form=form, language_id=self.current_language_id
             )
@@ -1762,6 +1821,44 @@ class PokedexWindow(QWidget):
                 raise ValueError("pokedex.get_pokemon must return a dict")
 
             self.current_data = data
+
+            # Store the exact pokemon_id of the current form (for shiny sprite)
+            pid_raw = data.get("id")
+
+            try:
+                self.current_pokemon_id = (
+                    int(str(pid_raw).strip()) if pid_raw is not None else None
+                )
+            except Exception:
+                self.current_pokemon_id = None
+
+            # stable species id for language switching
+            dex_raw = data.get("dex_number")
+            if dex_raw is None:
+                self.current_species_id = None
+            else:
+                try:
+                    self.current_species_id = int(str(dex_raw).strip())
+                except ValueError:
+                    self.current_species_id = None
+
+            # stable identifier for reloads
+            if self.current_species_id is not None:
+                self.current_identifier = str(self.current_species_id)
+            else:
+                self.current_identifier = str(identifier).strip() or None
+
+            # Form state:
+            # - If form is explicitly provided, keep it.
+            # - If form is None, we are loading the base form.
+            try:
+                if form is None:
+                    self.current_form_identifier = None
+                else:
+                    requested = str(form).strip()
+                    self.current_form_identifier = requested or None
+            except Exception:
+                self.current_form_identifier = None
 
             self._bind_header(data)
             self._bind_types(data.get("types", []))
@@ -1797,7 +1894,22 @@ class PokedexWindow(QWidget):
         self.lbl_dex.setText(f"Dex #: {dex}")
 
         image = data.get("image")
-        pm = _load_pixmap(image, None) if image else QPixmap()
+        pm = QPixmap()
+
+        # Normal mode → always trust API image (form-aware)
+        if not self.is_shiny:
+            pm = _load_pixmap(image, None) if image else QPixmap()
+
+        # Shiny mode → use local shiny sprite by pokemon_id
+        else:
+            if self.current_pokemon_id is not None:
+                rel = f"data/sprites/sprites/pokemon/other/home/shiny/{self.current_pokemon_id}.png"
+                pm = QPixmap(_resolve_asset_path(rel))
+
+            # fallback to normal if shiny not found
+            if pm.isNull() and image:
+                pm = _load_pixmap(image, None)
+
         if pm.isNull():
             self.lbl_sprite.setText("No image")
             self.lbl_sprite.setSourcePixmap(QPixmap())
@@ -1805,8 +1917,8 @@ class PokedexWindow(QWidget):
             self.lbl_sprite.setText("")
             self.lbl_sprite.setSourcePixmap(pm)
 
-        self._rescale_type_icons()
-        QTimer.singleShot(0, self._rescale_type_icons)
+        self._schedule_type_rescale()
+        self._position_shiny_button()
 
     def _bind_types(self, types: list):
         # Clear layout widgets
@@ -1882,6 +1994,10 @@ class PokedexWindow(QWidget):
             return
         self.input_name.setText(ident)
         self.current_identifier = ident
+
+        # Going to a Pokémon from the evolution line default to base form
+        self.current_form_identifier = None
+
         self._load_pokemon_data(identifier=ident, form=None)
 
     def _go_to_item_by_name(self, item_name: str) -> None:
@@ -2134,7 +2250,7 @@ class PokedexWindow(QWidget):
 
     # -------- Forms combo: stable (frozen) --------
 
-    def _bind_forms(self, identifier: str, data: dict):
+    def _bind_forms(self, identifier: str | int, data: dict):
         if self._forms_cache_identifier != identifier:
             self._forms_order = []
 
@@ -2157,6 +2273,7 @@ class PokedexWindow(QWidget):
         prev_choice = (
             self.form_combo.currentText().strip() if self.form_combo.count() > 0 else ""
         )
+        desired_choice = (self.current_form_identifier or "").strip()
 
         self.form_combo.blockSignals(True)
         self.form_combo.clear()
@@ -2165,16 +2282,29 @@ class PokedexWindow(QWidget):
 
         self.form_combo.setEnabled(bool(self._forms_order))
 
-        if prev_choice and prev_choice in self._forms_order:
-            self.form_combo.setCurrentText(prev_choice)
-        elif self._forms_order:
-            self.form_combo.setCurrentText(self._forms_order[0])
+        # Selection priority:
+        # 0) If we intentionally loaded base form (form=None), reset to default (first option).
+        # 1) desired_choice (from current state / language switch)
+        # 2) prev_choice
+        # 3) first form
+        if self._forms_order:
+            if getattr(self, "_force_base_form_select", False):
+                self.form_combo.setCurrentText(self._forms_order[0])
+            elif desired_choice and desired_choice in self._forms_order:
+                self.form_combo.setCurrentText(desired_choice)
+            elif prev_choice and prev_choice in self._forms_order:
+                self.form_combo.setCurrentText(prev_choice)
+            else:
+                self.form_combo.setCurrentText(self._forms_order[0])
 
         self.form_combo.blockSignals(False)
 
+        # Consume the flag after applying it
+        self._force_base_form_select = False
+
     # -------- Pokédex flavor --------
 
-    def _bind_pokedex_flavor(self, identifier: str):
+    def _bind_pokedex_flavor(self, identifier: str | int):
         self._flavor_versions = []
         self._flavor_texts = []
 
@@ -2442,6 +2572,23 @@ class PokedexWindow(QWidget):
                 combo.addItem(ident.capitalize(), userData=ident)
 
         combo.blockSignals(False)
+
+    # -------------------------------------------------------------------------
+    # Shiny button handlers
+    # -------------------------------------------------------------------------
+
+    def _position_shiny_button(self) -> None:
+        if not hasattr(self, "btn_shiny"):
+            return
+        margin = 8
+        self.btn_shiny.move(margin, margin)
+        self.btn_shiny.raise_()
+
+    def _on_shiny_toggled(self, checked: bool) -> None:
+        self.is_shiny = bool(checked)
+
+        if isinstance(self.current_data, dict) and self.current_data:
+            self._bind_header(self.current_data)
 
 
 # ---- Entrypoint ---------------------------------------------------------------
