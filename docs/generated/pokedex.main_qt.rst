@@ -26,4 +26,5 @@ main\_qt
 
    .. autosummary::
 
+      AutoPixmapLabel
       PokedexWindow

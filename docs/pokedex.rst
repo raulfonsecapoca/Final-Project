@@ -1,5 +1,5 @@
-Functional API
-==============
+Functional API - Pokedex
+========================
 
 .. autosummary::
    :nosignatures:

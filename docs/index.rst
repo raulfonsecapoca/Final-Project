@@ -8,6 +8,7 @@ Welcome to Pokedex documentation!
 
    pokedex
    readme
+   known_issues
 
 Indices and tables
 ==================

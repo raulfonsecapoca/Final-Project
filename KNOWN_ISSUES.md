@@ -1,5 +1,3 @@
-# Known Issues
-
 ## Ability Generation Chart
 
 The generation chart aggregates data at the species level.
