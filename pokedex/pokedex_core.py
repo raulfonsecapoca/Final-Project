@@ -14,8 +14,7 @@ interface, including:
 Notes
 -----
 - CSV files are resolved relative to the project root under ``data/csv``.
-- DataFrames are loaded at import time. If you need lazy loading or faster
-  startup, consider moving I/O behind a loader function or using caching.
+- DataFrames are loaded at import time.
 
 See Also
 --------
@@ -156,8 +155,7 @@ class PokemonEvolNode:
     Notes
     -----
     This structure is designed for rendering; it intentionally stores display
-    strings and relative asset paths. If you need strict typing for missing
-    values, consider replacing ``"NaN"`` with ``None`` and updating the UI logic.
+    strings and relative asset paths.
     """
 
     dex_no: int
@@ -432,7 +430,7 @@ class PokedexAPI:
 
         image = f"data/sprites/sprites/pokemon/{int(species_id)}.png"
 
-        # --- evolution meta for THIS species (how you reach THIS node from its parent)
+        # --- evolution meta for this species
         evo_row = pokemon_evolution_df[
             pokemon_evolution_df["evolved_species_id"] == species_id
         ]
@@ -513,7 +511,7 @@ class PokedexAPI:
                 if item_identifier is not None:
                     evol_image = f"data/sprites/sprites/items/{item_identifier}.png"
 
-            # Known-move / location / other fields (only if they exist in your csv)
+            # Known-move / location / other fields
             if "known_move_id" in r and not PokedexAPI._is_nan(r["known_move_id"]):
                 parts.append(f"Known move {int(r['known_move_id'])}")
 
@@ -531,7 +529,6 @@ class PokedexAPI:
                 parts.append(f"Gender {int(r['gender_id'])}")
 
             if "min_level" in r and not PokedexAPI._is_nan(r["min_level"]):
-                # just in case your csv uses a different column name
                 parts.append(f"Lv. {int(r['min_level'])}")
 
             # Boolean-ish flags if present
@@ -550,7 +547,7 @@ class PokedexAPI:
                 parts.append("Upside down")
 
             if parts:
-                # If we have conditions, optionally prepend the trigger when it adds meaning (e.g. Trade)
+                # If conditions, optionally prepend the trigger when it adds meaning (e.g. Trade)
                 if trigger_label and trigger_label.casefold() == "trade":
                     evol_trigger_value = ", ".join([trigger_label] + parts)
                 else:
@@ -735,7 +732,6 @@ class PokedexAPI:
             == ability_str.casefold()
         ]
 
-        # Optional fallback: if you store identifiers too
         if row.empty and "identifier" in ability_names_df.columns:
             row = ability_names_df[
                 ability_names_df["identifier"].astype(str).str.casefold()
@@ -1222,7 +1218,6 @@ class PokedexAPI:
             == ability_str.casefold()
         ]
 
-        # Optional fallback: if you store identifiers too
         if row.empty and "identifier" in ability_names_df.columns:
             row = ability_names_df[
                 ability_names_df["identifier"].astype(str).str.casefold()
@@ -1316,7 +1311,6 @@ class PokedexAPI:
             == ability_str.casefold()
         ]
 
-        # Optional fallback: if you store identifiers too
         if row.empty and "identifier" in ability_names_df.columns:
             row = ability_names_df[
                 ability_names_df["identifier"].astype(str).str.casefold()
@@ -1405,7 +1399,6 @@ class PokedexAPI:
             item_names_df["name"].astype(str).str.casefold() == item_str.casefold()
         ]
 
-        # Optional fallback: if you store item_id too
         if row.empty:
             row = item_names_df[
                 item_names_df["item_id"].astype(str).str.casefold()
@@ -1468,9 +1461,8 @@ class PokedexAPI:
         forms_enable: bool = False,
         generations_enable: list[bool] | None = None,
         bins: int = 20,
-        clamp_range: tuple[int, int]
-        | None = None,  # e.g. (0, 255) if you want fixed range
-        form: int | str | None = None,  # optional, same idea as get_pokemon
+        clamp_range: tuple[int, int] | None = None,  # e.g. (0, 255)
+        form: int | str | None = None,
     ) -> ChartData:
         """
         Build a histogram of a given base stat over the pokemons selected by filters,

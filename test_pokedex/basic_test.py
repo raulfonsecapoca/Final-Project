@@ -80,7 +80,7 @@ def test_build_evolution_tree_contains_charizard_line_by_dex_numbers() -> None:
     Ensure the evolution tree for the Charmander line contains (4,5,6):
     Charmander -> Charmeleon -> Charizard.
 
-    We validate by dex numbers to avoid language-dependent name comparisons.
+    Validation by dex numbers to avoid language-dependent name comparisons.
     """
 
     root = PokedexAPI.build_evolution_tree(species_id=4, language_id=9)
@@ -244,33 +244,47 @@ def test_fire_stone_name_and_description_by_language(language_id: int) -> None:
 
 
 def test_type_chart_smoke() -> None:
-    """Type chart returns consistent labels/values."""
-    chart = PokedexAPI.get_type_chart(language_id=9, forms_enable=False)
+    """Type chart works with forms and gen filters."""
+    chart = PokedexAPI.get_type_chart(
+        language_id=5,  # non-English to hit fallback paths
+        forms_enable=True,
+        generations_enable=[True, False, True, True, True, True, True, True, True],
+    )
     assert chart.total > 0
     assert len(chart.labels) == len(chart.values)
+    assert all(isinstance(x, str) and x.strip() for x in chart.labels)
+    assert all(isinstance(v, int) and v >= 0 for v in chart.values)
 
 
 def test_gen_chart_smoke() -> None:
-    """Generation chart returns consistent labels/values."""
-    chart = PokedexAPI.get_gen_chart(language_id=9, type_filter=None)
+    """Gen chart works with a type filter."""
+    chart = PokedexAPI.get_gen_chart(language_id=9, type_filter="electric")
     assert chart.total > 0
     assert len(chart.labels) == len(chart.values)
+    assert all(isinstance(x, str) and x.strip() for x in chart.labels)
+    assert all(isinstance(v, int) and v >= 0 for v in chart.values)
 
 
 def test_egg_chart_smoke() -> None:
-    """Egg chart returns consistent labels/values."""
-    chart = PokedexAPI.get_egg_chart(language_id=9, type_filter=None)
+    """Egg chart works with type + gen filters."""
+    chart = PokedexAPI.get_egg_chart(
+        language_id=6,  # non-English to hit fallback paths
+        type_filter="electric",
+        generations_enable=[True, True, True, False, True, True, True, True, True],
+    )
     assert chart.total > 0
     assert len(chart.labels) == len(chart.values)
+    assert all(isinstance(x, str) and x.strip() for x in chart.labels)
+    assert all(isinstance(v, int) and v >= 0 for v in chart.values)
 
 
 def test_ability_charts_smoke_from_pikachu() -> None:
-    """Ability charts work for a known ability."""
+    """Ability charts cover non-English and multiple branches."""
     pikachu = PokedexAPI.get_pokemon("pikachu", language_id=9)
     ability = pikachu["abilities"][0]
 
-    chart_t = PokedexAPI.get_ability_type_chart(ability=ability, language_id=9)
-    chart_g = PokedexAPI.get_ability_gen_chart(ability=ability, language_id=9)
+    chart_t = PokedexAPI.get_ability_type_chart(ability=ability, language_id=5)
+    chart_g = PokedexAPI.get_ability_gen_chart(ability=ability, language_id=6)
 
     assert chart_t.total > 0
     assert len(chart_t.labels) == len(chart_t.values)
@@ -280,15 +294,118 @@ def test_ability_charts_smoke_from_pikachu() -> None:
 
 
 def test_stat_histogram_smoke_pikachu_hp() -> None:
-    """Stat histogram returns valid bins and metadata."""
+    """Histogram covers filters, forms and edge paths."""
     chart = PokedexAPI.get_stat_histogram(
         identifier="pikachu",
-        stat_key="HP",
-        language_id=9,
-        bins=10,
+        stat_key="hp",  # exercise alias path vs "HP"
+        language_id=5,  # non-English to hit fallback
+        type_filter="electric",
+        forms_enable=True,
+        generations_enable=[True, True, True, True, False, True, True, True, True],
+        bins=12,
         clamp_range=(0, 255),
     )
     assert isinstance(chart.labels, list)
     assert isinstance(chart.values, list)
     assert len(chart.labels) == len(chart.values)
     assert chart.total > 0
+    assert "selected_identifier" in chart.meta
+    assert "selected_value" in chart.meta
+
+
+def test_get_pokemon_invalid_identifier_raises() -> None:
+    """Invalid Pokémon should raise ValueError."""
+    with pytest.raises(ValueError):
+        PokedexAPI.get_pokemon("not_a_real_pokemon")
+
+
+def test_get_ability_description_hidden_flag() -> None:
+    """Ability description handles hidden flag."""
+    pikachu = PokedexAPI.get_pokemon("pikachu", language_id=9)
+    ability = pikachu["abilities"][0]
+    desc = PokedexAPI.get_ability_description(
+        ability=ability,
+        is_hidden=True,
+        language_id=5,  # non-English
+    )
+    assert isinstance(desc, str)
+    assert desc.startswith("(Hidden Ability)")
+
+
+def test_type_name_non_english_language() -> None:
+    """Non-English language returns non-empty type list."""
+    types = PokedexAPI.get_all_types(language_id=5)
+    assert isinstance(types, list)
+    assert len(types) > 0
+
+
+def test_stat_histogram_no_data_branch() -> None:
+    """Histogram handles empty filtered result."""
+    chart = PokedexAPI.get_stat_histogram(
+        identifier="pikachu",
+        stat_key="HP",
+        language_id=9,
+        type_filter="ghost",  # unlikely combo for Pikachu
+        generations_enable=[False] * 9,  # disable everything
+    )
+    assert chart.total == 0
+    assert chart.labels == []
+    assert chart.values == []
+
+
+def test_get_gen_chart_with_localized_type() -> None:
+    """Gen chart resolves localized type names."""
+    chart = PokedexAPI.get_gen_chart(language_id=5, type_filter="Électrik")
+    assert chart.total > 0
+
+
+def test_get_pokemon_with_valid_form_and_invalid_form() -> None:
+    """Covers form branch and invalid form error."""
+    forms = PokedexAPI.get_available_forms("pikachu")
+    assert isinstance(forms, list)
+    assert len(forms) > 0
+
+    payload = PokedexAPI.get_pokemon("pikachu", form=forms[0])
+    assert payload["forms"]
+
+    with pytest.raises(ValueError):
+        PokedexAPI.get_pokemon("pikachu", form="not_a_real_form")
+
+
+def test_get_available_forms_invalid_identifier() -> None:
+    """Invalid identifier raises in get_available_forms."""
+    with pytest.raises(ValueError):
+        PokedexAPI.get_available_forms("not_a_real_pokemon")
+
+
+def test_get_item_error_paths() -> None:
+    """Covers item empty and invalid error branches."""
+    with pytest.raises(ValueError):
+        PokedexAPI.get_item("")
+
+    with pytest.raises(ValueError):
+        PokedexAPI.get_item("not_a_real_item")
+
+
+def test_get_ability_error_paths() -> None:
+    """Covers ability empty and invalid branches."""
+    with pytest.raises(ValueError):
+        PokedexAPI.get_ability_description("", False)
+
+    with pytest.raises(ValueError):
+        PokedexAPI.get_ability_description("not_a_real_ability", False)
+
+
+def test_stat_histogram_invalid_stat_key() -> None:
+    """Invalid stat key raises ValueError."""
+    with pytest.raises(ValueError):
+        PokedexAPI.get_stat_histogram(
+            identifier="pikachu",
+            stat_key="not_a_stat",
+        )
+
+
+def test_type_filter_invalid_raises() -> None:
+    """Invalid type filter raises error."""
+    with pytest.raises(ValueError):
+        PokedexAPI.get_gen_chart(language_id=9, type_filter="not_a_type")

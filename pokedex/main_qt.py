@@ -1506,7 +1506,7 @@ class PokedexWindow(QWidget):
         chart.legend().setVisible(selected_idx is not None)
         chart_view.setChart(chart)
 
-        # ---- Info text (only the fields you asked for) ----
+        # ---- Info text ----
         desc = ""
         stat_key = ""
         bins = ""
@@ -1850,7 +1850,7 @@ class PokedexWindow(QWidget):
 
             # Form state:
             # - If form is explicitly provided, keep it.
-            # - If form is None, we are loading the base form.
+            # - If form is None, load the base form.
             try:
                 if form is None:
                     self.current_form_identifier = None
@@ -2283,7 +2283,7 @@ class PokedexWindow(QWidget):
         self.form_combo.setEnabled(bool(self._forms_order))
 
         # Selection priority:
-        # 0) If we intentionally loaded base form (form=None), reset to default (first option).
+        # 0) If intentionally loaded base form (form=None), reset to default (first option).
         # 1) desired_choice (from current state / language switch)
         # 2) prev_choice
         # 3) first form
