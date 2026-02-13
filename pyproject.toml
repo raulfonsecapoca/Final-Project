@@ -68,7 +68,7 @@ check-yield-types = false
 [tool.pytest.ini_options]
 doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]
 addopts = "--import-mode=importlib --doctest-modules"
-testpaths = ["test_numpy", "numpy"]
+testpaths = ["test_pokedex", "pokedex"]
 
 [tool.coverage.run]
 source = ["pokedex"]
