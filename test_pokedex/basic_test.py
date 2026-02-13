@@ -241,3 +241,54 @@ def test_fire_stone_name_and_description_by_language(language_id: int) -> None:
         f"Fire Stone description mismatch for language_id={language_id}. "
         f"Expected '{expected_desc}', got '{item['item_flavor_text']}'."
     )
+
+
+def test_type_chart_smoke() -> None:
+    """Type chart returns consistent labels/values."""
+    chart = PokedexAPI.get_type_chart(language_id=9, forms_enable=False)
+    assert chart.total > 0
+    assert len(chart.labels) == len(chart.values)
+
+
+def test_gen_chart_smoke() -> None:
+    """Generation chart returns consistent labels/values."""
+    chart = PokedexAPI.get_gen_chart(language_id=9, type_filter=None)
+    assert chart.total > 0
+    assert len(chart.labels) == len(chart.values)
+
+
+def test_egg_chart_smoke() -> None:
+    """Egg chart returns consistent labels/values."""
+    chart = PokedexAPI.get_egg_chart(language_id=9, type_filter=None)
+    assert chart.total > 0
+    assert len(chart.labels) == len(chart.values)
+
+
+def test_ability_charts_smoke_from_pikachu() -> None:
+    """Ability charts work for a known ability."""
+    pikachu = PokedexAPI.get_pokemon("pikachu", language_id=9)
+    ability = pikachu["abilities"][0]
+
+    chart_t = PokedexAPI.get_ability_type_chart(ability=ability, language_id=9)
+    chart_g = PokedexAPI.get_ability_gen_chart(ability=ability, language_id=9)
+
+    assert chart_t.total > 0
+    assert len(chart_t.labels) == len(chart_t.values)
+
+    assert chart_g.total > 0
+    assert len(chart_g.labels) == len(chart_g.values)
+
+
+def test_stat_histogram_smoke_pikachu_hp() -> None:
+    """Stat histogram returns valid bins and metadata."""
+    chart = PokedexAPI.get_stat_histogram(
+        identifier="pikachu",
+        stat_key="HP",
+        language_id=9,
+        bins=10,
+        clamp_range=(0, 255),
+    )
+    assert isinstance(chart.labels, list)
+    assert isinstance(chart.values, list)
+    assert len(chart.labels) == len(chart.values)
+    assert chart.total > 0
